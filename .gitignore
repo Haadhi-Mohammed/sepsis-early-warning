@@ -28,3 +28,7 @@ mlruns/
 # Windows system files
 Thumbs.db
 desktop.ini
+
+# Large data files
+data/processed/*.npy
+data/processed/*.pkl
