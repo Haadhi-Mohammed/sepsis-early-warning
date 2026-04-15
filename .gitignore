@@ -32,3 +32,6 @@ desktop.ini
 # Large data files
 data/processed/*.npy
 data/processed/*.pkl
+
+notebooks/mlflow.db
+mlruns/
