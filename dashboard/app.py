@@ -19,7 +19,7 @@ st.set_page_config(
 )
 
 # ── API config ─────────────────────────────────────────
-API_URL = "http://127.0.0.1:8000"
+API_URL = "https://sepsis-early-warning.onrender.com"
 
 # ── Custom CSS ─────────────────────────────────────────
 st.markdown("""
