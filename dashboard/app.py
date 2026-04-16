@@ -282,6 +282,97 @@ if predict_btn:
             plt.tight_layout()
             st.pyplot(fig)
 
+            # ── SHAP Explanation ───────────────────────
+            st.divider()
+            st.subheader("🔍 What Drove This Prediction?")
+            st.markdown(
+                "*Based on SHAP analysis — "
+                "which features most influenced "
+                "the risk score*"
+            )
+
+            shap_col1, shap_col2 = st.columns(2)
+
+            with shap_col1:
+                st.markdown("**🔴 Risk-Increasing Factors**")
+                risk_factors = result.get(
+                    'top_risk_factors', []
+                )
+                if risk_factors:
+                    for factor in risk_factors:
+                        contribution = factor['contribution']
+                        display      = factor['display_name']
+                        shap_val     = factor['shap_value']
+
+                        # Colour bar based on contribution
+                        bar_width = min(
+                            abs(shap_val) * 1000, 100
+                        )
+                        st.markdown(
+                            f"""
+                            <div style="margin-bottom:8px">
+                                <div style="display:flex;
+                                    justify-content:space-between">
+                                    <span>{display}</span>
+                                    <strong style="color:#F44336">
+                                        {contribution}
+                                    </strong>
+                                </div>
+                                <div style="background:#eee;
+                                    border-radius:4px;height:8px">
+                                    <div style="background:#F44336;
+                                        width:{bar_width}%;
+                                        height:8px;
+                                        border-radius:4px">
+                                    </div>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                else:
+                    st.info("No risk-increasing factors detected")
+
+            with shap_col2:
+                st.markdown("**🟢 Protective Factors**")
+                protective = result.get(
+                    'protective_factors', []
+                )
+                if protective:
+                    for factor in protective:
+                        contribution = factor['contribution']
+                        display      = factor['display_name']
+                        shap_val     = factor['shap_value']
+
+                        bar_width = min(
+                            abs(shap_val) * 1000, 100
+                        )
+                        st.markdown(
+                            f"""
+                            <div style="margin-bottom:8px">
+                                <div style="display:flex;
+                                    justify-content:space-between">
+                                    <span>{display}</span>
+                                    <strong style="color:#4CAF50">
+                                        {contribution}
+                                    </strong>
+                                </div>
+                                <div style="background:#eee;
+                                    border-radius:4px;height:8px">
+                                    <div style="background:#4CAF50;
+                                        width:{bar_width}%;
+                                        height:8px;
+                                        border-radius:4px">
+                                    </div>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                else:
+                    st.info("No protective factors detected")
+
+
             # ── Clinical notes ─────────────────────────
             st.divider()
             st.subheader("📋 Clinical Notes")

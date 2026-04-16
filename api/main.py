@@ -16,6 +16,11 @@ import uvicorn
 BASE_DIR  = Path(__file__).parent.parent
 MODEL_DIR = BASE_DIR / 'models'
 
+# ── Explainer import ───────────────────────────────────
+import sys
+sys.path.append(str(BASE_DIR / 'src'))
+from explainer import load_explainer, SepsisExplainer
+
 # ── Load model config ──────────────────────────────────
 with open(MODEL_DIR / 'model_config.pkl', 'rb') as f:
     config = pickle.load(f)
@@ -72,6 +77,14 @@ model.load_state_dict(
 model.eval()
 print("Model loaded successfully")
 
+# ── Load SHAP explainer ────────────────────────────────
+print("Loading SHAP explainer...")
+explainer = load_explainer(model, FEATURE_COLS)
+if explainer:
+    print("SHAP explainer ready")
+else:
+    print("SHAP explainer not available")
+
 # ── FastAPI app ────────────────────────────────────────
 app = FastAPI(
     title       = "Sepsis Early Warning API",
@@ -116,6 +129,12 @@ class PredictionRequest(BaseModel):
     patient_id: str
     readings:   list[HourlyReading]
 
+class SHAPFactor(BaseModel):
+    feature:      str
+    display_name: str
+    shap_value:   float
+    contribution: str
+
 class PredictionResponse(BaseModel):
     """Risk prediction result"""
     patient_id:      str
@@ -125,6 +144,8 @@ class PredictionResponse(BaseModel):
     sepsis_in_6h:    bool
     threshold_used:  float
     hours_of_data:   int
+    top_risk_factors:   list[SHAPFactor] = []
+    protective_factors: list[SHAPFactor] = []
 
 # ── Helper functions ───────────────────────────────────
 LAB_FEATURES = ['Lactate','WBC','Creatinine',
@@ -257,14 +278,46 @@ def predict(request: PredictionRequest):
     # Get alert level
     alert_level, alert_message = get_alert_level(risk_score)
 
+    # Get SHAP explanations
+    top_risk   = []
+    protective = []
+
+    if explainer:
+        try:
+            factors = explainer.get_top_factors(
+                features, top_n=5
+            )
+
+            for f in factors['risk_increasing'][:3]:
+                top_risk.append(SHAPFactor(
+                    feature      = f['feature'],
+                    display_name = f['display_name'],
+                    shap_value   = f['shap_value'],
+                    contribution = f"+{f['shap_value']*100:.1f}%"
+                ))
+
+            for f in factors['risk_decreasing'][:3]:
+                protective.append(SHAPFactor(
+                    feature      = f['feature'],
+                    display_name = f['display_name'],
+                    shap_value   = f['shap_value'],
+                    contribution = f"{f['shap_value']*100:.1f}%"
+                ))
+        except Exception as e:
+            print(f"SHAP error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
     return PredictionResponse(
-        patient_id     = request.patient_id,
-        risk_score     = round(risk_score, 4),
-        alert_level    = alert_level,
-        alert_message  = alert_message,
-        sepsis_in_6h   = risk_score >= THRESHOLD,
-        threshold_used = THRESHOLD,
-        hours_of_data  = len(request.readings),
+        patient_id          = request.patient_id,
+        risk_score          = round(risk_score, 4),
+        alert_level         = alert_level,
+        alert_message       = alert_message,
+        sepsis_in_6h        = risk_score >= THRESHOLD,
+        threshold_used      = THRESHOLD,
+        hours_of_data       = len(request.readings),
+        top_risk_factors    = top_risk,
+        protective_factors  = protective,
     )
 
 # ── Run server ─────────────────────────────────────────
@@ -275,3 +328,4 @@ if __name__ == "__main__":
         port     = 8000,
         reload   = True
     )
+
