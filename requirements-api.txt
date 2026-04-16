@@ -1,0 +1,9 @@
+fastapi==0.135.3
+uvicorn==0.43.0
+torch --index-url https://download.pytorch.org/whl/cpu
+shap==0.51.0
+numpy==2.4.4
+pandas==2.3.3
+scikit-learn==1.8.0
+python-dotenv==1.2.2
+pydantic==2.12.5

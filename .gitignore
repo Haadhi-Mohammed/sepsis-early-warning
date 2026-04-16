@@ -12,9 +12,15 @@ __pycache__/
 # Raw data - too large for GitHub
 data/raw/
 
-# Trained model files - too large for GitHub
-models/*.pt
-models/*.pkl
+# Keep these - needed for deployment
+# models/*.pkl  <- remove this line
+# models/*.pt   <- remove this line
+
+# Large files to exclude
+data/processed/*.npy
+data/processed/*.pkl
+notebooks/mlflow.db
+mlruns/
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
