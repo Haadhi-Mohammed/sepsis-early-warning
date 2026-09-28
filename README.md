@@ -82,8 +82,8 @@ pytest
 uvicorn api.main:app --reload
 ```
 
-Notebooks `02_preprocessing` and `03_training` are the original exploratory
-versions and are superseded by the package.
+`notebooks/01_exploration.ipynb` holds the exploratory data analysis behind
+the feature choices; its charts are in `reports/`.
 
 ## Author
 
