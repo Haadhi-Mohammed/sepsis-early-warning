@@ -41,3 +41,7 @@ data/processed/*.pkl
 
 notebooks/mlflow.db
 mlruns/
+# Phase 0 pipeline outputs
+data/processed/*.npz
+*.egg-info/
+data/processed/*.json

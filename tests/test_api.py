@@ -1,135 +1,82 @@
-# tests/test_api.py
+import importlib
+
 import pytest
-from unittest.mock import patch, MagicMock
-import numpy as np
-import sys
-from pathlib import Path
+from fastapi.testclient import TestClient
 
-sys.path.append(str(Path(__file__).parent.parent))
+READING = {"HR": 95, "O2Sat": 94, "SBP": 105, "MAP": 72, "DBP": 55,
+           "Resp": 22, "Temp": 38.2, "Age": 67, "Gender": 1,
+           "HospAdmTime": -2}
 
-# ── Mock model and config before importing app ─────────
-# This prevents FileNotFoundError in CI environment
 
-mock_config = {
-    'input_size':    23,
-    'hidden_size':   64,
-    'num_layers':    2,
-    'dropout':       0.3,
-    'window_size':   6,
-    'n_features':    23,
-    'feature_cols':  [
-        'HR','O2Sat','SBP','MAP','DBP','Resp','Temp',
-        'Lactate','WBC','Creatinine','Glucose','pH','Hgb',
-        'Age','Gender','HospAdmTime','ICULOS',
-        'Lactate_obs','WBC_obs','Creatinine_obs',
-        'Glucose_obs','pH_obs','Hgb_obs'
-    ],
-    'threshold':     0.05,
-    'auroc':         0.7796,
-    'scale_features':['HR','O2Sat','SBP','MAP','DBP',
-                      'Resp','Temp','Lactate','WBC',
-                      'Creatinine','Glucose','pH','Hgb',
-                      'Age','HospAdmTime','ICULOS'],
-}
+def readings(n):
+    return [{**READING, "ICULOS": i + 1, "HR": 90 + i} for i in range(n)]
 
-# Sample readings for tests
-SAMPLE_READINGS = [
-    {"HR":95,"O2Sat":94,"SBP":105,"MAP":72,
-     "DBP":55,"Resp":22,"Temp":38.2,
-     "Age":67,"Gender":1,"HospAdmTime":-2,"ICULOS":1},
-    {"HR":98,"O2Sat":93,"SBP":102,"MAP":70,
-     "DBP":53,"Resp":23,"Temp":38.4,
-     "Age":67,"Gender":1,"HospAdmTime":-2,"ICULOS":2},
-    {"HR":102,"O2Sat":92,"SBP":98,"MAP":68,
-     "DBP":50,"Resp":24,"Temp":38.6,
-     "Age":67,"Gender":1,"HospAdmTime":-2,"ICULOS":3},
-    {"HR":105,"O2Sat":91,"SBP":95,"MAP":65,
-     "DBP":48,"Resp":25,"Temp":38.7,
-     "Age":67,"Gender":1,"HospAdmTime":-2,"ICULOS":4},
-    {"HR":108,"O2Sat":90,"SBP":92,"MAP":63,
-     "DBP":46,"Resp":26,"Temp":38.8,
-     "Age":67,"Gender":1,"HospAdmTime":-2,"ICULOS":5},
-    {"HR":112,"O2Sat":89,"SBP":88,"MAP":60,
-     "DBP":44,"Resp":28,"Temp":39.0,
-     "Age":67,"Gender":1,"HospAdmTime":-2,"ICULOS":6},
-]
 
-def get_mock_app():
-    """Create app with mocked model and dependencies"""
-    import pickle
-    import torch
-    
-    mock_scaler = MagicMock()
-    mock_scaler.transform.return_value = np.zeros((6, 16))
-    
-    with patch('builtins.open', MagicMock()), \
-         patch('pickle.load', return_value=mock_config), \
-         patch('torch.load', return_value={}), \
-         patch('torch.nn.Module.load_state_dict'), \
-         patch('torch.nn.Module.eval'):
-        
-        with patch.dict('sys.modules', {
-            'explainer': MagicMock()
-        }):
-            pass
-    
-    return None
+def make_client(monkeypatch, model_dir):
+    monkeypatch.setenv('MODEL_DIR', str(model_dir))
+    import api.main
+    importlib.reload(api.main)   # re-read MODEL_DIR
+    return TestClient(api.main.app)
 
-# ── Simple structure tests (no model needed) ───────────
-def test_sample_readings_structure():
-    """Test that our sample readings have correct structure"""
-    assert len(SAMPLE_READINGS) == 6
-    for reading in SAMPLE_READINGS:
-        assert 'HR' in reading
-        assert 'O2Sat' in reading
-        assert 'ICULOS' in reading
-    print("✓ Sample readings structure test passed")
 
-def test_mock_config_structure():
-    """Test that model config has required fields"""
-    required_keys = [
-        'input_size', 'hidden_size', 'num_layers',
-        'dropout', 'window_size', 'feature_cols',
-        'threshold', 'scale_features'
-    ]
-    for key in required_keys:
-        assert key in mock_config, f"Missing key: {key}"
-    assert len(mock_config['feature_cols']) == 23
-    assert mock_config['threshold'] == 0.05
-    print("✓ Config structure test passed")
+@pytest.fixture
+def client(monkeypatch, bundle_dir):
+    with make_client(monkeypatch, bundle_dir) as c:
+        yield c
 
-def test_window_size():
-    """Test that window size matches readings"""
-    assert mock_config['window_size'] == 6
-    assert len(SAMPLE_READINGS) == mock_config['window_size']
-    print("✓ Window size test passed")
 
-def test_feature_count():
-    """Test correct number of features"""
-    assert mock_config['n_features'] == 23
-    assert len(mock_config['feature_cols']) == 23
-    print("✓ Feature count test passed")
+def test_health(client):
+    r = client.get('/health')
+    assert r.status_code == 200
+    assert r.json() == {'status': 'healthy', 'model_loaded': True,
+                        'model_version': 'test'}
 
-def test_alert_thresholds():
-    """Test alert level logic"""
-    def get_alert_level(score, threshold=0.05):
-        if score >= 0.4:
-            return "RED"
-        elif score >= 0.2:
-            return "AMBER"
-        elif score >= threshold:
-            return "YELLOW"
-        else:
-            return "GREEN"
-    
-    assert get_alert_level(0.01) == "GREEN"
-    assert get_alert_level(0.06) == "YELLOW"
-    assert get_alert_level(0.25) == "AMBER"
-    assert get_alert_level(0.45) == "RED"
-    print("✓ Alert threshold logic test passed")
 
-def test_readings_count_validation():
-    """Test that wrong reading count is detected"""
-    wrong_count = SAMPLE_READINGS[:3]  # Only 3 readings
-    assert len(wrong_count) != mock_config['window_size']
-    print("✓ Reading count validation test passed")
+def test_root_reports_model_from_config(client):
+    model = client.get('/').json()['model']
+    assert model['decision_threshold'] == 0.3
+    assert model['explanations'] is True
+
+
+def test_predict_returns_consistent_alert(client):
+    r = client.post('/predict', json={'patient_id': 'P1', 'readings': readings(6)})
+    assert r.status_code == 200
+    body = r.json()
+    assert 0 <= body['risk_score'] <= 1
+    assert body['alert_level'] in {'GREEN', 'YELLOW', 'AMBER', 'RED'}
+    assert body['sepsis_in_6h'] == (body['risk_score'] >= 0.3)
+    assert body['hours_of_data'] == 6
+    factors = body['top_risk_factors'] + body['protective_factors']
+    assert factors and all(f['contribution'].endswith('pp') for f in factors)
+
+
+def test_longer_history_is_accepted(client):
+    r = client.post('/predict', json={'patient_id': 'P1', 'readings': readings(24)})
+    assert r.status_code == 200
+    assert r.json()['hours_of_data'] == 24
+
+
+def test_missing_values_are_imputed(client):
+    sparse = [{"ICULOS": i + 1} for i in range(6)]
+    sparse[2]["Lactate"] = 3.1
+    r = client.post('/predict', json={'patient_id': 'P1', 'readings': sparse})
+    assert r.status_code == 200
+
+
+def test_short_history_is_padded(client):
+    # A new admission can be scored from its first hour
+    r = client.post('/predict', json={'patient_id': 'P1', 'readings': readings(1)})
+    assert r.status_code == 200
+    assert r.json()['hours_of_data'] == 1
+
+
+def test_empty_readings_rejected(client):
+    r = client.post('/predict', json={'patient_id': 'P1', 'readings': []})
+    assert r.status_code == 422
+
+
+def test_missing_model_reports_unhealthy(monkeypatch, tmp_path):
+    with make_client(monkeypatch, tmp_path / 'nope') as c:
+        assert c.get('/health').status_code == 503
+        r = c.post('/predict', json={'patient_id': 'P1', 'readings': readings(6)})
+        assert r.status_code == 503

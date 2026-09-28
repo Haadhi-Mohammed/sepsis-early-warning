@@ -1,0 +1,123 @@
+{
+  "model_version": "20260928-170614",
+  "feature_cols": [
+    "HR",
+    "O2Sat",
+    "SBP",
+    "MAP",
+    "DBP",
+    "Resp",
+    "Temp",
+    "Lactate",
+    "WBC",
+    "Creatinine",
+    "Glucose",
+    "pH",
+    "Hgb",
+    "Age",
+    "Gender",
+    "HospAdmTime",
+    "ICULOS",
+    "Lactate_obs",
+    "WBC_obs",
+    "Creatinine_obs",
+    "Glucose_obs",
+    "pH_obs",
+    "Hgb_obs"
+  ],
+  "window_size": 6,
+  "horizon_hours": 6,
+  "architecture": {
+    "hidden_size": 64,
+    "num_layers": 2,
+    "dropout": 0.3
+  },
+  "training": {
+    "hidden_size": 64,
+    "num_layers": 2,
+    "dropout": 0.3,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "batch_size": 1024,
+    "epochs": 30,
+    "patience": 5,
+    "pos_weight": 1.0,
+    "seed": 42,
+    "best_epoch": 2,
+    "history": [
+      {
+        "epoch": 1,
+        "train_loss": 0.11126203110653962,
+        "val_auroc": 0.758835458339667,
+        "val_utility": 0.3482312338222606
+      },
+      {
+        "epoch": 2,
+        "train_loss": 0.090953457039818,
+        "val_auroc": 0.7882117976834245,
+        "val_utility": 0.36095676349343314
+      },
+      {
+        "epoch": 3,
+        "train_loss": 0.088344714679476,
+        "val_auroc": 0.7813152779868808,
+        "val_utility": 0.34550666283194326
+      },
+      {
+        "epoch": 4,
+        "train_loss": 0.08664498248062258,
+        "val_auroc": 0.7804633262224266,
+        "val_utility": 0.3553925798101812
+      },
+      {
+        "epoch": 5,
+        "train_loss": 0.08468845009894736,
+        "val_auroc": 0.7746041094075331,
+        "val_utility": 0.33843543284440614
+      },
+      {
+        "epoch": 6,
+        "train_loss": 0.08188500770570627,
+        "val_auroc": 0.7682156459000641,
+        "val_utility": 0.3429345220975938
+      },
+      {
+        "epoch": 7,
+        "train_loss": 0.08051342599750161,
+        "val_auroc": 0.7697727768416698,
+        "val_utility": 0.33266321541558824
+      }
+    ]
+  },
+  "decision_threshold": 0.025178075697104528,
+  "alert_thresholds": {
+    "YELLOW": 0.025178075697104528,
+    "AMBER": 0.030787954106926918,
+    "RED": 0.09430968761444092
+  },
+  "validation": {
+    "auroc": 0.7882117976834245,
+    "auprc": 0.10476804113901922,
+    "prevalence": 0.021564774215221405,
+    "n": 158221,
+    "utility": 0.36095676349343314,
+    "at_threshold": {
+      "threshold": 0.025178075697104528,
+      "sensitivity": 0.5509964830011723,
+      "specificity": 0.8496599034939829,
+      "ppv": 0.07473960403911903,
+      "flagged_rate": 0.15898016066135343,
+      "tp": 1880,
+      "fp": 23274,
+      "tn": 131535,
+      "fn": 1532
+    },
+    "patient_level": {
+      "septic_patients": 358,
+      "septic_warned_early": 0.659217877094972,
+      "septic_warned": 0.7011173184357542,
+      "nonseptic_patients": 3709,
+      "nonseptic_alarm": 0.4087355082232408
+    }
+  }
+}
