@@ -20,11 +20,13 @@ from sepsis_infra.foundation_stack import FoundationStack
 
 app = cdk.App()
 
-# Explicit account + region: CDK resolves these from your AWS credentials
-# (CDK_DEFAULT_ACCOUNT) and we pin the region to the one chosen for the
-# project, so a stray AWS_REGION can't deploy somewhere unexpected.
+# Explicit account + region: CDK resolves the account from your AWS
+# credentials (CDK_DEFAULT_ACCOUNT) and we pin the region to the one chosen
+# for the project, so a stray AWS_REGION can't deploy somewhere unexpected.
+# Mumbai: ~50 ms from the developer in India vs ~300 ms to us-east-1, for
+# ~5% higher SageMaker prices (cents at this scale), and data stays in India.
 env = cdk.Environment(account=os.environ.get('CDK_DEFAULT_ACCOUNT'),
-                      region='us-east-1')
+                      region='ap-south-1')
 
 budget_email = os.environ.get('BUDGET_EMAIL')
 if not budget_email:

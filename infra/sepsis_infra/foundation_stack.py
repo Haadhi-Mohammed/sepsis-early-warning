@@ -16,11 +16,18 @@ from constructs import Construct
 
 GITHUB_OIDC_URL = 'https://token.actions.githubusercontent.com'
 
-# AWS-owned ECR registries (us-east-1) that host the prebuilt SageMaker
-# containers we use instead of building our own images.
+# AWS-owned ECR registries that host the prebuilt SageMaker containers we
+# use instead of building our own images. The account differs per region
+# for some frameworks (from sagemaker.core.image_uris.retrieve).
 SAGEMAKER_IMAGE_REGISTRIES = {
-    'deep-learning-containers': '763104351884',   # PyTorch training/inference
-    'sklearn-processing':       '683313688378',   # SKLearn processing
+    'ap-south-1': {
+        'deep-learning-containers': '763104351884',   # PyTorch training/inference
+        'sklearn-processing':       '720646828776',   # SKLearn processing
+    },
+    'us-east-1': {
+        'deep-learning-containers': '763104351884',
+        'sklearn-processing':       '683313688378',
+    },
 }
 
 
@@ -154,7 +161,7 @@ class FoundationStack(Stack):
             actions=['ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer',
                      'ecr:BatchCheckLayerAvailability'],
             resources=[f'arn:aws:ecr:{self.region}:{acct}:repository/*'
-                       for acct in SAGEMAKER_IMAGE_REGISTRIES.values()],
+                       for acct in SAGEMAKER_IMAGE_REGISTRIES[self.region].values()],
         ))
         role.add_to_policy(iam.PolicyStatement(
             sid='EcrLogin',
