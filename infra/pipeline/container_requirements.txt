@@ -1,0 +1,5 @@
+# Installed on top of AWS's prebuilt PyTorch container (which already has
+# torch and numpy) before each job runs. Copied into the code bundle as
+# requirements.txt.
+pandas>=2.0
+scikit-learn>=1.3
