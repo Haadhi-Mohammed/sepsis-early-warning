@@ -39,7 +39,8 @@ class FoundationStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, *,
                  github_repo: str, budget_email: str,
-                 monthly_budget_usd: int, **kwargs) -> None:
+                 monthly_budget_usd: int, model_registry: bool,
+                 **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         self._budget(budget_email, monthly_budget_usd)
@@ -49,14 +50,18 @@ class FoundationStack(Stack):
         self.artifacts_bucket = self._bucket(
             'ArtifactsBucket', 'Model bundles, evaluation reports, pipeline outputs')
 
-        self.model_group = sagemaker.CfnModelPackageGroup(
-            self, 'ModelPackageGroup',
-            model_package_group_name=MODEL_PACKAGE_GROUP,
-            model_package_group_description=(
-                'Sepsis early warning LSTM. Versions are registered by the '
-                'training pipeline as PendingManualApproval; approving one '
-                'releases it for deployment.'),
-        )
+        # Behind a flag: new accounts start with a quota of 0 Model Package
+        # Groups. Turn on `model_registry` in cdk.json once the quota
+        # (L-BC8DC54C) is raised; the role's permissions are granted either way.
+        if model_registry:
+            sagemaker.CfnModelPackageGroup(
+                self, 'ModelPackageGroup',
+                model_package_group_name=MODEL_PACKAGE_GROUP,
+                model_package_group_description=(
+                    'Sepsis early warning LSTM. Versions are registered by the '
+                    'training pipeline as PendingManualApproval; approving one '
+                    'releases it for deployment.'),
+            )
 
         self.sagemaker_role = self._sagemaker_role()
         self.github_role = self._github_role(github_repo)
@@ -64,7 +69,8 @@ class FoundationStack(Stack):
         # Values later phases and the CLI need. `cdk deploy` prints them.
         CfnOutput(self, 'DataBucketName', value=self.data_bucket.bucket_name)
         CfnOutput(self, 'ArtifactsBucketName', value=self.artifacts_bucket.bucket_name)
-        CfnOutput(self, 'ModelPackageGroupName', value=MODEL_PACKAGE_GROUP)
+        if model_registry:
+            CfnOutput(self, 'ModelPackageGroupName', value=MODEL_PACKAGE_GROUP)
         CfnOutput(self, 'SageMakerRoleArn', value=self.sagemaker_role.role_arn)
         CfnOutput(self, 'GitHubDeployRoleArn', value=self.github_role.role_arn)
 

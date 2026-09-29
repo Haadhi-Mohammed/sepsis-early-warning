@@ -38,6 +38,7 @@ FoundationStack(
     github_repo=app.node.get_context('github_repo'),
     budget_email=budget_email,
     monthly_budget_usd=int(app.node.get_context('monthly_budget_usd')),
+    model_registry=str(app.node.get_context('model_registry')).lower() == 'true',
     description='Sepsis early warning: storage, IAM roles, CI access and cost guardrails',
     # CloudFormation refuses to delete a protected stack until protection
     # is switched off, so a mistyped `cdk destroy` can't wipe the data.

@@ -17,6 +17,7 @@
   "context": {
     "github_repo": "Haadhi-Mohammed/sepsis-early-warning",
     "monthly_budget_usd": 10,
+    "model_registry": false,
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
     "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
     "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,
