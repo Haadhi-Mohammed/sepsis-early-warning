@@ -3,7 +3,9 @@ Foundation stack: the long-lived pieces every later phase builds on.
 
   - Cost guardrail: a monthly AWS Budget that emails before money is spent
   - Storage: one S3 bucket for data, one for model artifacts
-  - SageMaker execution role: what training/processing jobs run as
+  - SageMaker execution role: what the pipeline and its jobs run as
+  - Model Package Group: the Model Registry entry every trained model
+    version is recorded in
   - GitHub Actions role: lets CI deploy through OIDC, with no stored keys
 """
 
@@ -11,10 +13,12 @@ from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_budgets as budgets
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_sagemaker as sagemaker
 from cdk_nag import NagSuppressions
 from constructs import Construct
 
 GITHUB_OIDC_URL = 'https://token.actions.githubusercontent.com'
+MODEL_PACKAGE_GROUP = 'sepsis-warning'
 
 # AWS-owned ECR registries that host the prebuilt SageMaker containers we
 # use instead of building our own images. The account differs per region
@@ -45,12 +49,22 @@ class FoundationStack(Stack):
         self.artifacts_bucket = self._bucket(
             'ArtifactsBucket', 'Model bundles, evaluation reports, pipeline outputs')
 
+        self.model_group = sagemaker.CfnModelPackageGroup(
+            self, 'ModelPackageGroup',
+            model_package_group_name=MODEL_PACKAGE_GROUP,
+            model_package_group_description=(
+                'Sepsis early warning LSTM. Versions are registered by the '
+                'training pipeline as PendingManualApproval; approving one '
+                'releases it for deployment.'),
+        )
+
         self.sagemaker_role = self._sagemaker_role()
         self.github_role = self._github_role(github_repo)
 
         # Values later phases and the CLI need. `cdk deploy` prints them.
         CfnOutput(self, 'DataBucketName', value=self.data_bucket.bucket_name)
         CfnOutput(self, 'ArtifactsBucketName', value=self.artifacts_bucket.bucket_name)
+        CfnOutput(self, 'ModelPackageGroupName', value=MODEL_PACKAGE_GROUP)
         CfnOutput(self, 'SageMakerRoleArn', value=self.sagemaker_role.role_arn)
         CfnOutput(self, 'GitHubDeployRoleArn', value=self.github_role.role_arn)
 
@@ -127,8 +141,9 @@ class FoundationStack(Stack):
     # ── SageMaker execution role ───────────────────────────────────────────
     def _sagemaker_role(self) -> iam.Role:
         """
-        The identity SageMaker jobs run as. Phase 2 adds the pipeline
-        permissions it needs; here it only gets data access and logging.
+        The identity the training pipeline runs as, and that its jobs run
+        as: data access, logging, starting its own jobs, and registering
+        model versions in this project's Model Package Group only.
 
         The aws:SourceAccount condition stops SageMaker from assuming this
         role on behalf of a *different* account (the "confused deputy"
@@ -169,12 +184,45 @@ class FoundationStack(Stack):
             resources=['*'],   # this action only supports "*"
         ))
 
+        # ── Running the pipeline ──
+        # A SageMaker Pipeline doesn't do work itself: it calls
+        # CreateProcessingJob / CreateTrainingJob as this role, then polls
+        # them with Describe*.
+        sm = f'arn:aws:sagemaker:{self.region}:{self.account}'
+        role.add_to_policy(iam.PolicyStatement(
+            sid='RunPipelineJobs',
+            actions=['sagemaker:CreateProcessingJob', 'sagemaker:DescribeProcessingJob',
+                     'sagemaker:StopProcessingJob',
+                     'sagemaker:CreateTrainingJob', 'sagemaker:DescribeTrainingJob',
+                     'sagemaker:StopTrainingJob',
+                     'sagemaker:AddTags'],
+            resources=[f'{sm}:processing-job/*', f'{sm}:training-job/*'],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            sid='RegisterModelVersions',
+            actions=['sagemaker:CreateModelPackage', 'sagemaker:DescribeModelPackage',
+                     'sagemaker:DescribeModelPackageGroup', 'sagemaker:AddTags'],
+            resources=[f'{sm}:model-package-group/{MODEL_PACKAGE_GROUP}',
+                       f'{sm}:model-package/{MODEL_PACKAGE_GROUP}/*'],
+        ))
+        # Each job it creates must run *as* this role, and handing a role to
+        # a service requires iam:PassRole. Limiting it to itself and to
+        # SageMaker means the pipeline can't hand out any more powerful role.
+        role.add_to_policy(iam.PolicyStatement(
+            sid='PassSelfToSageMakerJobs',
+            actions=['iam:PassRole'],
+            resources=[role.role_arn],
+            conditions={'StringEquals': {'iam:PassedToService': 'sagemaker.amazonaws.com'}},
+        ))
+
         NagSuppressions.add_resource_suppressions(role, [{
             'id': 'AwsSolutions-IAM5',
             'reason': 'Wildcards are scoped: bucket objects (bucket/*) of this '
                       "project's buckets only, SageMaker's own log groups, AWS's "
-                      'prebuilt-image registries, and two actions that only '
-                      'accept "*" (PutMetricData, limited by namespace, and '
+                      'prebuilt-image registries, this account\'s processing/'
+                      'training jobs (job names are generated per run), versions '
+                      'of this project\'s model group only, and two actions that '
+                      'only accept "*" (PutMetricData, limited by namespace, and '
                       'GetAuthorizationToken).',
         }], apply_to_children=True)
         return role
