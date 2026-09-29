@@ -1,5 +1,6 @@
 # Virtual environment
 venv/
+.venv/
 
 # Python cache and build files
 __pycache__/
@@ -33,3 +34,7 @@ hf-space/
 # Windows system files
 Thumbs.db
 desktop.ini
+
+# CDK
+infra/node_modules/
+infra/cdk.out/
