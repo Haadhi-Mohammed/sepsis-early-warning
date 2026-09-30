@@ -159,7 +159,7 @@ predict_btn = st.sidebar.button(
 
 # ── Main dashboard ─────────────────────────────────────
 if predict_btn:
-    with st.spinner("Analysing patient data..."):
+    with st.spinner("Analysing patient data... (the first request can take up to a minute while the free-tier server wakes up)"):
         try:
             response = requests.post(
                 f"{API_URL}/predict",
@@ -167,8 +167,12 @@ if predict_btn:
                     "patient_id": patient_id,
                     "readings":   hours_data
                 },
-                timeout=10
+                timeout=90   # free-tier hosting sleeps when idle; waking takes ~30-60 s
             )
+            if not response.ok:
+                raise RuntimeError(
+                    f"The API returned an error ({response.status_code}): "
+                    f"{response.text[:300]}")
             result = response.json()
 
             # ── Alert Banner ───────────────────────────
@@ -417,18 +421,19 @@ if predict_btn:
             # ── Model info ─────────────────────────────
             with st.expander("ℹ️ Model Information"):
                 st.markdown(f"""
-                **Model:** LSTM Neural Network  
-                **AUROC:** 0.7796  
-                **Threshold:** {result['threshold_used']}  
-                **Prediction window:** 6 hours  
-                **Training data:** 40,336 ICU patients  
-                **Dataset:** PhysioNet Sepsis Challenge 2019  
+                **Model:** LSTM neural network (version 2, `{result.get('model_version', '')}`)  
+                **Test AUROC:** 0.778 on a held-out hospital  
+                **Challenge utility score:** 0.281 (PhysioNet 2019 official metric)  
+                **Alert threshold:** {result['threshold_used']:.3f} (risk scores are calibrated probabilities)  
+                **Prediction window:** up to 6 hours before clinical onset  
+                **Data:** PhysioNet/CinC Challenge 2019. Trained on hospital A (20,336 patients), tested once on hospital B (20,000 patients)  
                 """)
 
-        except requests.exceptions.ConnectionError:
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout):
             st.error(
-                "❌ Cannot connect to API. "
-                "Make sure the API is running on port 8000."
+                "❌ Could not reach the prediction API. It runs on free "
+                "hosting that sleeps when idle, so please try again in a minute."
             )
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
@@ -459,8 +464,8 @@ else:
     with col3:
         st.markdown("""
         ### 📊 Model Performance
-        - **AUROC:** 0.7796
-        - **Sensitivity:** 80.9%
-        - **Dataset:** 40,336 patients
-        - **Prediction:** 6h early warning
+        - **Test AUROC:** 0.778 (held-out hospital)
+        - **Challenge utility:** 0.281
+        - **Septic patients warned before onset:** 54%
+        - **Data:** 40,336 ICU patients, 2 hospitals
         """)
