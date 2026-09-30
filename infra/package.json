@@ -1,0 +1,8 @@
+{
+  "name": "sepsis-infra",
+  "private": true,
+  "description": "CDK CLI for the sepsis early warning infrastructure (run with npx cdk)",
+  "devDependencies": {
+    "aws-cdk": "2.1143.0"
+  }
+}

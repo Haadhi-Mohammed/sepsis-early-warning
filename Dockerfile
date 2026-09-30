@@ -7,21 +7,15 @@ WORKDIR /app
 RUN pip install --no-cache-dir \
     torch --index-url https://download.pytorch.org/whl/cpu
 
-# Install remaining dependencies
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    shap \
-    numpy \
-    pandas \
-    scikit-learn \
-    python-dotenv \
-    pydantic
-
-# Copy application code
-COPY api/ ./api/
+# Install the sepsis package with API dependencies
+COPY pyproject.toml ./
 COPY src/ ./src/
-COPY models/ ./models/
+RUN pip install --no-cache-dir ".[api]"
+
+# Copy application code and the model bundle
+COPY api/ ./api/
+COPY models/production/ ./models/production/
+ENV MODEL_DIR=/app/models/production
 
 # Expose port
 EXPOSE 8000
