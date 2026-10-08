@@ -17,7 +17,8 @@
   "context": {
     "github_repo": "Haadhi-Mohammed/sepsis-early-warning",
     "monthly_budget_usd": 10,
-    "model_registry": false,
+    "model_registry": true,
+    "studio_role": "service-role/AmazonSageMaker-ExecutionRole-20261008T114273",
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
     "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
     "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,

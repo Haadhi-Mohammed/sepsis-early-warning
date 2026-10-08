@@ -69,8 +69,8 @@ flowchart LR
 | Part | AWS services | Status |
 |---|---|---|
 | Foundation (storage, IAM, cost guardrails, CI access) | S3, IAM, AWS Budgets, IAM OIDC for GitHub Actions, via AWS CDK | ✅ Deployed |
-| Training pipeline | SageMaker Pipelines, Processing, Managed Spot Training | ✅ Defined, awaiting first run |
-| Model versioning and approval | SageMaker Model Registry | Planned |
+| Training pipeline | SageMaker Pipelines, Processing (Managed Spot Training once quota allows) | ✅ Running |
+| Model versioning and approval | SageMaker Model Registry | ✅ Running, manual approval |
 | Serving | SageMaker Serverless Inference, Lambda, API Gateway | Planned |
 | Dashboard | S3 + CloudFront | Planned |
 | Monitoring and CD | EventBridge, CloudWatch, GitHub Actions | Planned |
@@ -79,6 +79,20 @@ Design choices: region `ap-south-1` (Mumbai) for latency and data residency;
 everything scales to zero when idle; infrastructure is defined in Python with
 AWS CDK and checked by cdk-nag; GitHub Actions deploys through OIDC with no
 stored AWS keys.
+
+The pipeline runs Prepare, Train and Evaluate as SageMaker jobs from the raw
+data in S3; Prepare is cached between runs. Runs that pass the quality gate
+(test utility ≥ 0.20) register a new model version, which is deployed only
+after manual approval. Training currently runs inside a Processing job
+because the account has no training-job quota yet; a one-line switch
+(`TRAINING_MODE` in `infra/pipeline/training_pipeline.py`) moves it to
+Managed Spot Training.
+
+Training is reproducible inside the pipeline (two runs produced the same
+model), but results vary across environments: the local run and the pipeline
+run reached the same validation utility (0.361) yet scored 0.281 and 0.243 on
+the test hospital, mainly because the alert threshold chosen on validation
+differs. Multi-seed evaluation is the planned next step.
 
 The current live demo (FastAPI on Render, Streamlit on Hugging Face) will be
 replaced by the AWS deployment.

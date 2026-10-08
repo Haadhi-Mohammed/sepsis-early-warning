@@ -1,7 +1,11 @@
 """
 SageMaker Pipeline that trains the sepsis model from the raw data in S3.
 
-    Prepare ──► Train (Spot) ──► Evaluate ──► QualityGate ──(fail)──► QualityGateFailed
+    Prepare ──► Train ──► Evaluate ──► QualityGate ──(pass)──► Register
+                                                   └─(fail)──► QualityGateFailed
+
+Train runs either as a Processing job or as a Managed Spot Training job,
+depending on TRAINING_MODE below.
 
 Run from infra/ with the virtualenv active:
 
@@ -25,6 +29,7 @@ from pathlib import Path
 
 import boto3
 from sagemaker.core.image_uris import retrieve
+from sagemaker.core.model_registry import create_model_package_from_containers
 from sagemaker.core.processing import (FrameworkProcessor, PipelineSession,
                                        ProcessingInput, ProcessingOutput,
                                        ProcessingS3Input)
@@ -35,6 +40,7 @@ from sagemaker.core.workflow import (ConditionGreaterThanOrEqualTo,
                                      PropertyFile)
 from sagemaker.mlops.workflow.condition_step import ConditionStep
 from sagemaker.mlops.workflow.fail_step import FailStep
+from sagemaker.mlops.workflow.model_step import ModelStep
 from sagemaker.mlops.workflow.pipeline import Pipeline
 from sagemaker.mlops.workflow.steps import (CacheConfig, ProcessingStep,
                                             TrainingStep)
@@ -80,12 +86,23 @@ if sys.platform == 'win32':
 REGION = 'ap-south-1'
 STACK_NAME = 'SepsisFoundation'
 PIPELINE_NAME = 'sepsis-training'
+MODEL_PACKAGE_GROUP = 'sepsis-warning'   # created by the CDK stack (model_registry flag)
 
 # One environment for every step: AWS's prebuilt PyTorch CPU container
 # (Python 3.11, like local development), plus container_requirements.txt.
 PYTORCH_VERSION = '2.5'
 PY_VERSION = 'py311'
-INSTANCE_TYPE = 'ml.m5.xlarge'   # 4 vCPU / 16 GB; the only type with quota requested
+
+# How the Train step runs:
+#   'processing'   - inside a Processing job. The account currently has
+#                    processing quota but 0 training-job quota.
+#   'training-job' - a SageMaker Training job on Managed Spot capacity, with
+#                    per-epoch metrics in the console. Switch to this once the
+#                    spot training quota (L-4CEE6BA6) is approved.
+TRAINING_MODE = 'processing'
+
+PROCESSING_INSTANCE = 'ml.t3.xlarge'   # 4 vCPU / 16 GB, burstable; has quota
+TRAINING_INSTANCE = 'ml.m5.xlarge'     # 4 vCPU / 16 GB; for 'training-job' mode
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[1]
@@ -94,7 +111,7 @@ CODE_BUNDLE = HERE.parent / 'build' / 'sm_code'
 
 def build_code_bundle() -> Path:
     """
-    Stage exactly what the containers need: the sepsis package, the two
+    Stage exactly what the containers need: the sepsis package, the
     entry scripts and requirements.txt. SageMaker uploads this folder to
     S3 and unpacks it inside each job.
     """
@@ -143,8 +160,11 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
                               default_bucket_prefix='pipeline')
 
     image = retrieve('pytorch', region=REGION, version=PYTORCH_VERSION,
-                     py_version=PY_VERSION, instance_type=INSTANCE_TYPE,
+                     py_version=PY_VERSION, instance_type=PROCESSING_INSTANCE,
                      image_scope='training')
+    inference_image = retrieve('pytorch', region=REGION, version=PYTORCH_VERSION,
+                               py_version=PY_VERSION, instance_type=PROCESSING_INSTANCE,
+                               image_scope='inference')
 
     # ── Parameters: values you can override per run without redeploying ──
     raw_data = ParameterString('RawDataS3Uri', default_value=f's3://{data_bucket}/raw/')
@@ -152,7 +172,7 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
 
     # ── 1. Prepare ────────────────────────────────────────────────────────
     prepare = FrameworkProcessor(
-        image_uri=image, role=role, instance_count=1, instance_type=INSTANCE_TYPE,
+        image_uri=image, role=role, instance_count=1, instance_type=PROCESSING_INSTANCE,
         command=['python3'], base_job_name='sepsis-prepare',
         max_runtime_in_seconds=3600, sagemaker_session=session,
     )
@@ -175,38 +195,17 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
     )
     splits_uri = step_prepare.properties.ProcessingOutputConfig.Outputs['splits'].S3Output.S3Uri
 
-    # ── 2. Train (Managed Spot) ───────────────────────────────────────────
-    trainer = ModelTrainer(
-        sagemaker_session=session, role=role, training_image=image,
-        base_job_name='sepsis-train',
-        source_code=SourceCode(
-            source_dir=code_dir, requirements='requirements.txt',
-            # Channels are always mounted at /opt/ml/input/data/<name>, and
-            # whatever is written to /opt/ml/model becomes model.tar.gz.
-            command='python -m sepsis.train '
-                    '--data-dir /opt/ml/input/data/train --model-dir /opt/ml/model'),
-        compute=Compute(instance_type=INSTANCE_TYPE, instance_count=1,
-                        volume_size_in_gb=10, enable_managed_spot_training=True),
-        # Spot: run at most 1 h, and wait at most 2 h in total for spare capacity
-        stopping_condition=StoppingCondition(max_runtime_in_seconds=3600,
-                                             max_wait_time_in_seconds=7200),
-        output_data_config=OutputDataConfig(s3_output_path=f's3://{artifacts_bucket}/models'),
-    ).with_metric_definitions([
-        # Scraped from the "key=value" lines sepsis.train prints each epoch
-        MetricDefinition(name='val_utility', regex=r'val_utility=([-0-9.]+)'),
-        MetricDefinition(name='val_auroc', regex=r'val_auroc=([-0-9.]+)'),
-        MetricDefinition(name='train_loss', regex=r'train_loss=([-0-9.]+)'),
-    ])
-    step_train = TrainingStep(
-        name='Train',
-        description='LSTM on Spot capacity; epoch and thresholds chosen on validation',
-        step_args=trainer.train(input_data_config=[
-            InputData(channel_name='train', data_source=splits_uri)]),
-    )
+    # ── 2. Train ──────────────────────────────────────────────────────────
+    train_step = (train_as_processing_job if TRAINING_MODE == 'processing'
+                  else train_as_spot_training_job)
+    step_train, model_uri = train_step(
+        session=session, role=role, image=image, code_dir=code_dir,
+        code_version=code_version, splits_uri=splits_uri,
+        artifacts_bucket=artifacts_bucket)
 
     # ── 3. Evaluate on the held-out test set ─────────────────────────────
     evaluate = FrameworkProcessor(
-        image_uri=image, role=role, instance_count=1, instance_type=INSTANCE_TYPE,
+        image_uri=image, role=role, instance_count=1, instance_type=PROCESSING_INSTANCE,
         command=['python3'], base_job_name='sepsis-evaluate',
         max_runtime_in_seconds=1800, sagemaker_session=session,
     )
@@ -220,7 +219,7 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
             job_name=f'sepsis-evaluate-{code_version}',
             inputs=[
                 ProcessingInput(input_name='model', s3_input=ProcessingS3Input(
-                    s3_uri=step_train.properties.ModelArtifacts.S3ModelArtifacts,
+                    s3_uri=model_uri,
                     local_path='/opt/ml/processing/model',
                     s3_data_type='S3Prefix', s3_input_mode='File')),
                 ProcessingInput(input_name='test', s3_input=ProcessingS3Input(
@@ -236,9 +235,39 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
         property_files=[report],
     )
 
+    # ── 5. Register (runs only if the quality gate passes) ────────────────
+    # PipelineSession captures the CreateModelPackage request instead of
+    # sending it; ModelStep turns the captured request into a pipeline step.
+    # Every passing run becomes a new version in the Model Registry, marked
+    # PendingManualApproval: a person reviews the metrics and approves it
+    # before it can be deployed.
+    session.init_model_step_arguments(types.SimpleNamespace(sagemaker_session=session))
+    evaluation_json = Join(on='/', values=[
+        step_evaluate.properties.ProcessingOutputConfig.Outputs['evaluation'].S3Output.S3Uri,
+        'evaluation.json'])
+    step_register = ModelStep(
+        name='Register',
+        description='Record the model and its test metrics as a new pending version',
+        step_args=create_model_package_from_containers(
+            session,
+            containers=[{'Image': inference_image, 'ModelDataUrl': model_uri}],
+            content_types=['application/json'],
+            response_types=['application/json'],
+            model_package_group_name=MODEL_PACKAGE_GROUP,
+            # Shown on the version's page in the registry (CreateModelPackage format)
+            model_metrics={'ModelQuality': {'Statistics': {
+                'ContentType': 'application/json', 'S3Uri': evaluation_json}}},
+            approval_status='PendingManualApproval',
+            description='Sepsis early warning LSTM trained by the sepsis-training pipeline',
+            customer_metadata_properties={
+                'training_mode': TRAINING_MODE,
+                'code_version': code_version,
+                'pipeline_execution': ExecutionVariables.PIPELINE_EXECUTION_ID,
+            },
+        ),
+    )
+
     # ── 4. Quality gate ──────────────────────────────────────────────────
-    # The model registration step joins if_steps once the Model Package
-    # Group quota is approved; until then a passing run just succeeds.
     step_gate = ConditionStep(
         name='QualityGate',
         description='Test utility must reach MinTestUtility',
@@ -246,7 +275,7 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
             left=JsonGet(step_name=step_evaluate.name, property_file=report,
                          json_path='test.utility'),
             right=min_utility)],
-        if_steps=[],
+        if_steps=[step_register],
         else_steps=[FailStep(
             name='QualityGateFailed',
             error_message=Join(on=' ', values=[
@@ -259,6 +288,75 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
         steps=[step_prepare, step_train, step_evaluate, step_gate],
         sagemaker_session=session,
     )
+
+
+def train_as_processing_job(*, session, role, image, code_dir, code_version,
+                            splits_uri, artifacts_bucket):
+    """
+    Train inside a Processing job: run_train.py runs sepsis.train and packs
+    the result as model.tar.gz. No Spot discount and no per-epoch metric
+    charts, but it only needs processing quota.
+    """
+    trainer = FrameworkProcessor(
+        image_uri=image, role=role, instance_count=1,
+        instance_type=PROCESSING_INSTANCE, command=['python3'],
+        base_job_name='sepsis-train', max_runtime_in_seconds=3600,
+        sagemaker_session=session,
+    )
+    step = ProcessingStep(
+        name='Train',
+        description='LSTM training (in a Processing job); epoch and thresholds chosen on validation',
+        step_args=trainer.run(
+            code='run_train.py', source_dir=code_dir, requirements='requirements.txt',
+            job_name=f'sepsis-train-{code_version}',
+            inputs=[ProcessingInput(input_name='splits', s3_input=ProcessingS3Input(
+                s3_uri=splits_uri, local_path='/opt/ml/processing/input/data',
+                s3_data_type='S3Prefix', s3_input_mode='File'))],
+            outputs=[ProcessingOutput(output_name='model', s3_output=ProcessingS3Output(
+                s3_uri=Join(on='/', values=[f's3://{artifacts_bucket}/models',
+                                            ExecutionVariables.PIPELINE_EXECUTION_ID]),
+                local_path='/opt/ml/processing/output', s3_upload_mode='EndOfJob'))],
+        ),
+    )
+    model_dir = step.properties.ProcessingOutputConfig.Outputs['model'].S3Output.S3Uri
+    return step, Join(on='/', values=[model_dir, 'model.tar.gz'])
+
+
+def train_as_spot_training_job(*, session, role, image, code_dir, code_version,
+                               splits_uri, artifacts_bucket):
+    """
+    Train as a SageMaker Training job on Managed Spot capacity (needs the
+    spot training quota). SageMaker packs /opt/ml/model into model.tar.gz
+    and charts the scraped metrics per epoch.
+    """
+    trainer = ModelTrainer(
+        sagemaker_session=session, role=role, training_image=image,
+        base_job_name='sepsis-train',
+        source_code=SourceCode(
+            source_dir=code_dir, requirements='requirements.txt',
+            # Channels are always mounted at /opt/ml/input/data/<name>, and
+            # whatever is written to /opt/ml/model becomes model.tar.gz.
+            command='python -m sepsis.train '
+                    '--data-dir /opt/ml/input/data/train --model-dir /opt/ml/model'),
+        compute=Compute(instance_type=TRAINING_INSTANCE, instance_count=1,
+                        volume_size_in_gb=10, enable_managed_spot_training=True),
+        # Spot: run at most 1 h, and wait at most 2 h in total for spare capacity
+        stopping_condition=StoppingCondition(max_runtime_in_seconds=3600,
+                                             max_wait_time_in_seconds=7200),
+        output_data_config=OutputDataConfig(s3_output_path=f's3://{artifacts_bucket}/models'),
+    ).with_metric_definitions([
+        # Scraped from the "key=value" lines sepsis.train prints each epoch
+        MetricDefinition(name='val_utility', regex=r'val_utility=([-0-9.]+)'),
+        MetricDefinition(name='val_auroc', regex=r'val_auroc=([-0-9.]+)'),
+        MetricDefinition(name='train_loss', regex=r'train_loss=([-0-9.]+)'),
+    ])
+    step = TrainingStep(
+        name='Train',
+        description='LSTM on Spot capacity; epoch and thresholds chosen on validation',
+        step_args=trainer.train(input_data_config=[
+            InputData(channel_name='train', data_source=splits_uri)]),
+    )
+    return step, step.properties.ModelArtifacts.S3ModelArtifacts
 
 
 def main():
