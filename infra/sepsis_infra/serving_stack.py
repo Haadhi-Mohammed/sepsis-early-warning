@@ -1,9 +1,15 @@
 """
-Serving stack: the approved model behind a SageMaker Serverless endpoint.
+Serving stack: the approved model behind a SageMaker Serverless endpoint,
+with a public HTTPS API in front.
 
-    Model (PyTorch inference container + serving model.tar.gz)
-      └─ Endpoint config (serverless: memory, max concurrency)
-           └─ Endpoint "sepsis-warning"
+    Function URL (HTTPS) ─► Lambda "api" ─► Endpoint "sepsis-warning"
+                                              └─ Endpoint config (serverless)
+                                                   └─ Model (PyTorch inference
+                                                      container + model.tar.gz)
+
+A Lambda Function URL rather than API Gateway: a serverless cold start takes
+~70 s, beyond API Gateway HTTP APIs' 30 s limit, while a Lambda can wait up to
+15 minutes.
 
 Which model is served comes from cdk.json ("serving": model version + code
 hash), written by `python -m serving.package_model`. Changing it replaces
@@ -11,8 +17,12 @@ the Model and endpoint config, and CloudFormation updates the endpoint to
 the new config in place (same name, same URL).
 """
 
-from aws_cdk import CfnOutput, Stack
+from pathlib import Path
+
+from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_iam as iam
+from aws_cdk import aws_lambda as lambda_
+from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sagemaker as sagemaker
 from cdk_nag import NagSuppressions
@@ -75,8 +85,12 @@ class ServingStack(Stack):
             endpoint_config_name=config.attr_endpoint_config_name,
         )
 
+        self.api_url = self._api(served_model=f'v{model_version} (code {code_version})')
+
         CfnOutput(self, 'EndpointName', value=ENDPOINT_NAME)
         CfnOutput(self, 'ServedModel', value=f'v{model_version} (code {code_version})')
+        CfnOutput(self, 'ApiUrl', value=self.api_url,
+                  description='Public HTTPS API: GET /health, POST /predict')
 
         NagSuppressions.add_resource_suppressions(config, [
             {'id': 'AwsSolutions-SM2',
@@ -90,3 +104,51 @@ class ServingStack(Stack):
                        'the model only reads its artifact from S3 and the public '
                        'de-identified dataset involves no private network data.'},
         ], apply_to_children=True)
+
+    # ── Public API ─────────────────────────────────────────────────────────
+    def _api(self, served_model: str) -> str:
+        """
+        A small Lambda that validates requests and forwards them to the
+        endpoint, exposed through a Function URL (a built-in HTTPS address).
+
+        Cost control: the endpoint's max_concurrency caps how many requests
+        run at once. (Reserved Lambda concurrency isn't possible while the
+        account's total Lambda limit is 10.)
+        """
+        log_group = logs.LogGroup(
+            self, 'ApiLogs', retention=logs.RetentionDays.ONE_MONTH,
+            removal_policy=RemovalPolicy.DESTROY)
+        fn = lambda_.Function(
+            self, 'Api',
+            description='Public sepsis prediction API in front of the SageMaker endpoint',
+            runtime=lambda_.Runtime.PYTHON_3_14,
+            handler='handler.handler',
+            code=lambda_.Code.from_asset(str(Path(__file__).parent.parent / 'serving' / 'api_lambda')),
+            memory_size=256,
+            # Must outlast a serverless cold start (~70 s)
+            timeout=Duration.seconds(150),
+            environment={'ENDPOINT_NAME': ENDPOINT_NAME, 'SERVED_MODEL': served_model},
+            log_group=log_group,
+        )
+        fn.add_to_role_policy(iam.PolicyStatement(
+            sid='InvokeSepsisEndpoint',
+            actions=['sagemaker:InvokeEndpoint'],
+            resources=[f'arn:{self.partition}:sagemaker:{self.region}:{self.account}'
+                       f':endpoint/{ENDPOINT_NAME}'],
+        ))
+        url = fn.add_function_url(
+            # Public, like the current demo API; the model sees no personal data
+            auth_type=lambda_.FunctionUrlAuthType.NONE,
+            cors=lambda_.FunctionUrlCorsOptions(
+                allowed_origins=['*'],
+                allowed_methods=[lambda_.HttpMethod.GET, lambda_.HttpMethod.POST],
+                allowed_headers=['content-type'],
+            ),
+        )
+        NagSuppressions.add_resource_suppressions(fn, [
+            {'id': 'AwsSolutions-IAM4',
+             'reason': 'AWSLambdaBasicExecutionRole only allows writing this '
+                       "function's own CloudWatch logs.",
+             'appliesTo': ['Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole']},
+        ], apply_to_children=True)
+        return url.url
