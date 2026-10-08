@@ -206,7 +206,11 @@ class FoundationStack(Stack):
         ))
         role.add_to_policy(iam.PolicyStatement(
             sid='RegisterModelVersions',
-            actions=['sagemaker:CreateModelPackage', 'sagemaker:DescribeModelPackage',
+            # The pipeline's Register step calls CreateModelPackageGroup
+            # ("create if missing") before adding a version, even though
+            # this stack already created the group.
+            actions=['sagemaker:CreateModelPackageGroup',
+                     'sagemaker:CreateModelPackage', 'sagemaker:DescribeModelPackage',
                      'sagemaker:DescribeModelPackageGroup', 'sagemaker:AddTags'],
             resources=[f'{sm}:model-package-group/{MODEL_PACKAGE_GROUP}',
                        f'{sm}:model-package/{MODEL_PACKAGE_GROUP}/*'],
