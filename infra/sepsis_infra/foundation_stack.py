@@ -40,7 +40,7 @@ class FoundationStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, *,
                  github_repo: str, budget_email: str,
                  monthly_budget_usd: int, model_registry: bool,
-                 **kwargs) -> None:
+                 studio_role: str | None = None, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         self._budget(budget_email, monthly_budget_usd)
@@ -65,6 +65,8 @@ class FoundationStack(Stack):
 
         self.sagemaker_role = self._sagemaker_role()
         self.github_role = self._github_role(github_repo)
+        if studio_role:
+            self._studio_read_evaluations(studio_role)
 
         # Values later phases and the CLI need. `cdk deploy` prints them.
         CfnOutput(self, 'DataBucketName', value=self.data_bucket.bucket_name)
@@ -236,6 +238,33 @@ class FoundationStack(Stack):
                       'GetAuthorizationToken).',
         }], apply_to_children=True)
         return role
+
+    # ── SageMaker Studio: read-only view of evaluation reports ────────────
+    def _studio_read_evaluations(self, role_path_and_name: str) -> None:
+        """
+        SageMaker Studio acts as its own execution role (created by the
+        console's Quick setup, outside this stack). To show a registered
+        model's quality metrics it reads evaluation.json from the artifacts
+        bucket, so allow exactly that: GetObject under evaluation/, nothing
+        else in the bucket.
+        """
+        studio_role = iam.Role.from_role_arn(
+            self, 'StudioExecutionRole',
+            f'arn:{self.partition}:iam::{self.account}:role/{role_path_and_name}')
+        policy = iam.Policy(
+            self, 'StudioReadEvaluations',
+            roles=[studio_role],
+            statements=[iam.PolicyStatement(
+                sid='ReadModelEvaluationReports',
+                actions=['s3:GetObject'],
+                resources=[self.artifacts_bucket.arn_for_objects('evaluation/*')],
+            )],
+        )
+        NagSuppressions.add_resource_suppressions(policy, [{
+            'id': 'AwsSolutions-IAM5',
+            'reason': 'Read-only GetObject limited to the evaluation/ prefix of '
+                      "this project's artifacts bucket (one report per pipeline run).",
+        }])
 
     # ── GitHub Actions deploy role (OIDC) ──────────────────────────────────
     def _github_role(self, repo: str) -> iam.Role:

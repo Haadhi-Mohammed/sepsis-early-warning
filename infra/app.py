@@ -39,6 +39,9 @@ FoundationStack(
     budget_email=budget_email,
     monthly_budget_usd=int(app.node.get_context('monthly_budget_usd')),
     model_registry=str(app.node.get_context('model_registry')).lower() == 'true',
+    # Optional: SageMaker Studio's execution role ("path/name"), to let Studio
+    # show model evaluation reports. Leave unset if Studio isn't used.
+    studio_role=app.node.try_get_context('studio_role'),
     description='Sepsis early warning: storage, IAM roles, CI access and cost guardrails',
     # CloudFormation refuses to delete a protected stack until protection
     # is switched off, so a mistyped `cdk destroy` can't wipe the data.
