@@ -17,6 +17,7 @@ import aws_cdk as cdk
 from cdk_nag import AwsSolutionsChecks
 
 from sepsis_infra.foundation_stack import FoundationStack
+from sepsis_infra.serving_stack import ServingStack
 
 app = cdk.App()
 
@@ -32,7 +33,7 @@ budget_email = os.environ.get('BUDGET_EMAIL')
 if not budget_email:
     raise SystemExit('Set BUDGET_EMAIL to the address for AWS cost alerts')
 
-FoundationStack(
+foundation = FoundationStack(
     app, 'SepsisFoundation',
     env=env,
     github_repo=app.node.get_context('github_repo'),
@@ -47,6 +48,20 @@ FoundationStack(
     # is switched off, so a mistyped `cdk destroy` can't wipe the data.
     termination_protection=True,
 )
+
+# Serving: deployed once a model version has been packaged for serving
+# (python -m serving.package_model writes "serving" into cdk.json).
+serving = app.node.try_get_context('serving')
+if serving:
+    ServingStack(
+        app, 'SepsisServing',
+        env=env,
+        artifacts_bucket=foundation.artifacts_bucket,
+        sagemaker_role=foundation.sagemaker_role,
+        model_version=int(serving['model_version']),
+        code_version=serving['code_version'],
+        description='Sepsis early warning: approved model on a SageMaker Serverless endpoint',
+    )
 
 # Every resource gets these tags, so costs can be filtered per project in
 # Cost Explorer (after activating the tag in Billing > Cost allocation tags).
