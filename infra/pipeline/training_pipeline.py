@@ -1,7 +1,8 @@
 """
 SageMaker Pipeline that trains the sepsis model from the raw data in S3.
 
-    Prepare ──► Train ──► Evaluate ──► QualityGate ──(fail)──► QualityGateFailed
+    Prepare ──► Train ──► Evaluate ──► QualityGate ──(pass)──► Register
+                                                   └─(fail)──► QualityGateFailed
 
 Train runs either as a Processing job or as a Managed Spot Training job,
 depending on TRAINING_MODE below.
@@ -28,6 +29,7 @@ from pathlib import Path
 
 import boto3
 from sagemaker.core.image_uris import retrieve
+from sagemaker.core.model_registry import create_model_package_from_containers
 from sagemaker.core.processing import (FrameworkProcessor, PipelineSession,
                                        ProcessingInput, ProcessingOutput,
                                        ProcessingS3Input)
@@ -38,6 +40,7 @@ from sagemaker.core.workflow import (ConditionGreaterThanOrEqualTo,
                                      PropertyFile)
 from sagemaker.mlops.workflow.condition_step import ConditionStep
 from sagemaker.mlops.workflow.fail_step import FailStep
+from sagemaker.mlops.workflow.model_step import ModelStep
 from sagemaker.mlops.workflow.pipeline import Pipeline
 from sagemaker.mlops.workflow.steps import (CacheConfig, ProcessingStep,
                                             TrainingStep)
@@ -83,6 +86,7 @@ if sys.platform == 'win32':
 REGION = 'ap-south-1'
 STACK_NAME = 'SepsisFoundation'
 PIPELINE_NAME = 'sepsis-training'
+MODEL_PACKAGE_GROUP = 'sepsis-warning'   # created by the CDK stack (model_registry flag)
 
 # One environment for every step: AWS's prebuilt PyTorch CPU container
 # (Python 3.11, like local development), plus container_requirements.txt.
@@ -158,6 +162,9 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
     image = retrieve('pytorch', region=REGION, version=PYTORCH_VERSION,
                      py_version=PY_VERSION, instance_type=PROCESSING_INSTANCE,
                      image_scope='training')
+    inference_image = retrieve('pytorch', region=REGION, version=PYTORCH_VERSION,
+                               py_version=PY_VERSION, instance_type=PROCESSING_INSTANCE,
+                               image_scope='inference')
 
     # ── Parameters: values you can override per run without redeploying ──
     raw_data = ParameterString('RawDataS3Uri', default_value=f's3://{data_bucket}/raw/')
@@ -228,9 +235,39 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
         property_files=[report],
     )
 
+    # ── 5. Register (runs only if the quality gate passes) ────────────────
+    # PipelineSession captures the CreateModelPackage request instead of
+    # sending it; ModelStep turns the captured request into a pipeline step.
+    # Every passing run becomes a new version in the Model Registry, marked
+    # PendingManualApproval: a person reviews the metrics and approves it
+    # before it can be deployed.
+    session.init_model_step_arguments(types.SimpleNamespace(sagemaker_session=session))
+    evaluation_json = Join(on='/', values=[
+        step_evaluate.properties.ProcessingOutputConfig.Outputs['evaluation'].S3Output.S3Uri,
+        'evaluation.json'])
+    step_register = ModelStep(
+        name='Register',
+        description='Record the model and its test metrics as a new pending version',
+        step_args=create_model_package_from_containers(
+            session,
+            containers=[{'Image': inference_image, 'ModelDataUrl': model_uri}],
+            content_types=['application/json'],
+            response_types=['application/json'],
+            model_package_group_name=MODEL_PACKAGE_GROUP,
+            # Shown on the version's page in the registry (CreateModelPackage format)
+            model_metrics={'ModelQuality': {'Statistics': {
+                'ContentType': 'application/json', 'S3Uri': evaluation_json}}},
+            approval_status='PendingManualApproval',
+            description='Sepsis early warning LSTM trained by the sepsis-training pipeline',
+            customer_metadata_properties={
+                'training_mode': TRAINING_MODE,
+                'code_version': code_version,
+                'pipeline_execution': ExecutionVariables.PIPELINE_EXECUTION_ID,
+            },
+        ),
+    )
+
     # ── 4. Quality gate ──────────────────────────────────────────────────
-    # The model registration step joins if_steps once the Model Package
-    # Group quota is approved; until then a passing run just succeeds.
     step_gate = ConditionStep(
         name='QualityGate',
         description='Test utility must reach MinTestUtility',
@@ -238,7 +275,7 @@ def build_pipeline(boto_session: boto3.Session) -> Pipeline:
             left=JsonGet(step_name=step_evaluate.name, property_file=report,
                          json_path='test.utility'),
             right=min_utility)],
-        if_steps=[],
+        if_steps=[step_register],
         else_steps=[FailStep(
             name='QualityGateFailed',
             error_message=Join(on=' ', values=[
@@ -281,8 +318,8 @@ def train_as_processing_job(*, session, role, image, code_dir, code_version,
                 local_path='/opt/ml/processing/output', s3_upload_mode='EndOfJob'))],
         ),
     )
-    model_uri = step.properties.ProcessingOutputConfig.Outputs['model'].S3Output.S3Uri
-    return step, model_uri
+    model_dir = step.properties.ProcessingOutputConfig.Outputs['model'].S3Output.S3Uri
+    return step, Join(on='/', values=[model_dir, 'model.tar.gz'])
 
 
 def train_as_spot_training_job(*, session, role, image, code_dir, code_version,
