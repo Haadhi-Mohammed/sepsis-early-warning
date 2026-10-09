@@ -79,7 +79,17 @@ function buildTable() {
   }
 }
 
+const PRESET_NOTES = {
+  septic: 'A known limitation: the model was trained to warn of sepsis developing in ' +
+    'the next hours, and its training data has few patients who are already in ' +
+    'established shock. Values this extreme and this stable are outside what it ' +
+    'learned, so it can score this patient lower than one who is visibly deteriorating.',
+};
+
 function applyPreset(name) {
+  const note = $('presetNote');
+  note.textContent = PRESET_NOTES[name] || '';
+  note.hidden = !PRESET_NOTES[name];
   const preset = PRESETS[name];
   for (const { key } of FIELDS) {
     for (let h = 0; h < HOURS; h++) {
