@@ -94,12 +94,12 @@ PYTORCH_VERSION = '2.5'
 PY_VERSION = 'py311'
 
 # How the Train step runs:
-#   'processing'   - inside a Processing job. The account currently has
-#                    processing quota but 0 training-job quota.
 #   'training-job' - a SageMaker Training job on Managed Spot capacity, with
-#                    per-epoch metrics in the console. Switch to this once the
-#                    spot training quota (L-4CEE6BA6) is approved.
-TRAINING_MODE = 'processing'
+#                    per-epoch metrics in the console (needs the spot training
+#                    quota, L-4CEE6BA6).
+#   'processing'   - inside a Processing job. Fallback for accounts with
+#                    processing quota but no training-job quota.
+TRAINING_MODE = 'training-job'
 
 PROCESSING_INSTANCE = 'ml.t3.xlarge'   # 4 vCPU / 16 GB, burstable; has quota
 TRAINING_INSTANCE = 'ml.m5.xlarge'     # 4 vCPU / 16 GB; for 'training-job' mode
