@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sepsis Early Warning</title>
+  <meta name="description" content="LSTM early-warning model for sepsis on hourly ICU vitals, served from AWS SageMaker Serverless.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Cpath d='M5 17h6l3-7 4 13 3-6h6' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M5 17h6l3-7 4 13 3-6h6"/></svg>
+      <div>
+        <h1>Sepsis Early Warning</h1>
+        <p class="tagline">Warns of sepsis up to 6 hours before clinical onset from hourly ICU vitals and labs</p>
+      </div>
+    </div>
+    <div class="status" id="modelStatus" role="status" aria-live="polite">
+      <span class="dot"></span><span class="label">Checking model…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel input-panel" aria-labelledby="inputTitle">
+      <div class="panel-head">
+        <h2 id="inputTitle">Patient readings</h2>
+        <div class="presets">
+          <span class="muted">Examples:</span>
+          <button type="button" class="chip" data-preset="stable">Stable</button>
+          <button type="button" class="chip" data-preset="deteriorating">Deteriorating</button>
+          <button type="button" class="chip" data-preset="septic">Already in shock</button>
+        </div>
+      </div>
+      <p id="presetNote" class="preset-note" hidden></p>
+
+      <form id="patientForm" novalidate>
+        <div class="demographics">
+          <label>Patient ID <input id="patientId" type="text" value="P001" maxlength="40"></label>
+          <label>Age <input id="age" type="number" min="18" max="100" value="65"></label>
+          <label>Sex
+            <select id="gender"><option value="1">Male</option><option value="0">Female</option></select>
+          </label>
+          <label title="Hours spent in hospital before ICU admission">Hours in hospital before ICU
+            <input id="hospAdm" type="number" step="0.5" min="0" max="2000" value="2">
+          </label>
+          <label title="ICU hour of the most recent reading">ICU hour of latest reading
+            <input id="lastHour" type="number" min="1" max="336" value="6">
+          </label>
+        </div>
+
+        <div class="table-wrap">
+          <table class="readings" id="readingsTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="hint">Six consecutive hours, oldest on the left. Labs are optional: leave blank when not measured. Missing vitals are carried forward from earlier hours, as in training.</p>
+
+        <button type="submit" class="primary" id="submitBtn">Assess sepsis risk</button>
+      </form>
+    </section>
+
+    <section class="panel result-panel" aria-labelledby="resultTitle" aria-live="polite">
+      <h2 id="resultTitle" class="visually-hidden">Result</h2>
+      <div id="resultEmpty" class="empty">
+        <p class="big">Choose an example or enter readings, then select <strong>Assess sepsis risk</strong>.</p>
+        <p class="muted">The model runs on a serverless endpoint that sleeps when idle; the first prediction after a quiet spell can take up to a minute while it starts.</p>
+      </div>
+      <div id="resultBody" hidden>
+        <div id="alertBanner" class="banner">
+          <div class="banner-level" id="alertLevel"></div>
+          <div class="banner-text">
+            <p class="banner-message" id="alertMessage"></p>
+            <p class="banner-meta" id="alertMeta"></p>
+          </div>
+          <div class="risk"><span id="riskValue"></span><span class="risk-label">risk</span></div>
+        </div>
+
+        <div class="factors">
+          <div>
+            <h3>Pushing risk up</h3>
+            <ul id="riskUp" class="bars up"></ul>
+          </div>
+          <div>
+            <h3>Pushing risk down</h3>
+            <ul id="riskDown" class="bars down"></ul>
+          </div>
+        </div>
+        <p class="hint">SHAP contributions in percentage points of risk, relative to typical patients.</p>
+
+        <h3>Vital sign trends</h3>
+        <div id="trends" class="trends"></div>
+
+        <h3>Notes on the latest hour</h3>
+        <ul id="notes" class="notes"></ul>
+      </div>
+    </section>
+  </main>
+
+  <section class="panel about">
+    <h2>About the model</h2>
+    <div class="facts">
+      <div><span class="fact">0.774</span><span class="fact-label">Test AUROC, held-out hospital</span></div>
+      <div><span class="fact">0.243</span><span class="fact-label">Challenge utility score (0.24–0.28 across runs)</span></div>
+      <div><span class="fact">67%</span><span class="fact-label">Septic patients warned before onset</span></div>
+      <div><span class="fact">41%</span><span class="fact-label">Non-septic patients alerted at least once</span></div>
+    </div>
+    <p>An LSTM over six hourly windows of 7 vitals, 6 labs, demographics and "lab was measured" flags, trained on PhysioNet/CinC Challenge 2019 data from one hospital (20,336 patients) and tested once on another (20,000). Training, evaluation and approval run as a SageMaker Pipeline with a Model Registry; the approved model is served from a SageMaker Serverless endpoint. <span id="servedModel"></span></p>
+    <p><a href="https://github.com/Haadhi-Mohammed/sepsis-early-warning">Source code and evaluation on GitHub</a></p>
+    <p class="disclaimer">Demonstration only. Not a medical device and not for clinical use.</p>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
