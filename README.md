@@ -16,18 +16,19 @@ early warning buys clinicians time to act.
 Trained on one hospital (PhysioNet Set A) and evaluated **once** on a second,
 unseen hospital (Set B: 20,000 patients, 1,142 septic):
 
-| Metric | Test (held-out hospital) |
-|---|---|
-| Official challenge utility score (1 = perfect, 0 = never alert) | **0.281** |
-| AUROC | **0.778** |
-| Septic patients warned in the 12 h before clinical onset | **54%** |
-| Non-septic patients who ever receive an alert | 24% |
-| Hours flagged | 11% |
+| Metric (test, held-out hospital) | Served model (registry v1, trained by the pipeline) | Local training run |
+|---|---|---|
+| Official challenge utility score (1 = perfect, 0 = never alert) | **0.243** | 0.281 |
+| AUROC | **0.774** | 0.778 |
+| Septic patients warned in the 12 h before clinical onset | **67%** | 54% |
+| Non-septic patients who ever receive an alert | 41% | 24% |
+| Hours flagged | 16% | 11% |
 
-The alert threshold maximises the challenge's utility function on the
-validation split, trading missed cases (heavily penalised) against false
-alarms. Validation utility was 0.361; the lower test score reflects the shift
-between hospitals.
+Both models reached the same validation utility (0.361). The alert threshold
+maximises the challenge's utility function on the validation split, trading
+missed cases (heavily penalised) against false alarms; the two runs chose
+slightly different thresholds, which explains most of the difference above,
+and the drop from validation to test reflects the shift between hospitals.
 
 ## How the model was built
 
@@ -61,9 +62,9 @@ flowchart LR
     end
     S3[(S3<br/>raw data)] --> P
     Q -->|pass| R[Model Registry]
-    R -.->|approved| EP[Serverless endpoint]
-    EP -.-> API[API Gateway + Lambda]
-    API -.-> UI[Static dashboard<br/>S3 + CloudFront]
+    R -->|approved| EP[Serverless endpoint]
+    EP --> API[Lambda + Function URL]
+    API --> UI[Dashboard<br/>Hugging Face, moving to S3 + CloudFront]
 ```
 
 | Part | AWS services | Status |
@@ -71,7 +72,7 @@ flowchart LR
 | Foundation (storage, IAM, cost guardrails, CI access) | S3, IAM, AWS Budgets, IAM OIDC for GitHub Actions, via AWS CDK | ✅ Deployed |
 | Training pipeline | SageMaker Pipelines, Processing (Managed Spot Training once quota allows) | ✅ Running |
 | Model versioning and approval | SageMaker Model Registry | ✅ Running, manual approval |
-| Serving | SageMaker Serverless Inference, Lambda, API Gateway | Planned |
+| Serving | SageMaker Serverless Inference, Lambda Function URL | ✅ Running |
 | Dashboard | S3 + CloudFront | Planned |
 | Monitoring and CD | EventBridge, CloudWatch, GitHub Actions | Planned |
 
@@ -94,8 +95,13 @@ run reached the same validation utility (0.361) yet scored 0.281 and 0.243 on
 the test hospital, mainly because the alert threshold chosen on validation
 differs. Multi-seed evaluation is the planned next step.
 
-The current live demo (FastAPI on Render, Streamlit on Hugging Face) will be
-replaced by the AWS deployment.
+The approved model is served from a SageMaker Serverless endpoint (scales to
+zero; warm requests take about 0.3 s, and the first request after idle waits
+25-70 s for a cold start). A Lambda Function URL provides the public API with
+the same routes as the FastAPI service (`GET /health`, `POST /predict`). A
+Function URL is used instead of API Gateway because the measured cold start
+exceeds API Gateway HTTP APIs' 30-second limit. The Streamlit dashboard on
+Hugging Face calls this API; the earlier Render deployment is being retired.
 
 ## Repository layout
 

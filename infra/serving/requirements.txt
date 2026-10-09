@@ -1,0 +1,4 @@
+# Installed by the PyTorch inference container when it starts (it already
+# has torch and numpy). shap powers the per-prediction explanations.
+pandas>=2.0
+shap>=0.45

@@ -19,7 +19,8 @@ st.set_page_config(
 )
 
 # ── API config ─────────────────────────────────────────
-API_URL = "https://sepsis-early-warning.onrender.com"
+# AWS: Lambda Function URL in front of a SageMaker Serverless endpoint
+API_URL = "https://l4rhyypyihws3rsmahas67pgam0pgrnt.lambda-url.ap-south-1.on.aws"
 
 # ── Custom CSS ─────────────────────────────────────────
 st.markdown("""
@@ -159,7 +160,7 @@ predict_btn = st.sidebar.button(
 
 # ── Main dashboard ─────────────────────────────────────
 if predict_btn:
-    with st.spinner("Analysing patient data... (the first request can take up to a minute while the free-tier server wakes up)"):
+    with st.spinner("Analysing patient data... (if the model has been idle, the first request takes up to ~70 seconds while the serverless endpoint starts)"):
         try:
             response = requests.post(
                 f"{API_URL}/predict",
@@ -167,7 +168,7 @@ if predict_btn:
                     "patient_id": patient_id,
                     "readings":   hours_data
                 },
-                timeout=90   # free-tier hosting sleeps when idle; waking takes ~30-60 s
+                timeout=150  # serverless cold start: ~25-70 s measured
             )
             if not response.ok:
                 raise RuntimeError(
@@ -421,9 +422,9 @@ if predict_btn:
             # ── Model info ─────────────────────────────
             with st.expander("ℹ️ Model Information"):
                 st.markdown(f"""
-                **Model:** LSTM neural network (version 2, `{result.get('model_version', '')}`)  
-                **Test AUROC:** 0.778 on a held-out hospital  
-                **Challenge utility score:** 0.281 (PhysioNet 2019 official metric)  
+                **Model:** LSTM neural network, registry version 1 (`{result.get('model_version', '')}`), on AWS SageMaker Serverless Inference  
+                **Test AUROC:** 0.774 on a held-out hospital  
+                **Challenge utility score:** 0.243 (PhysioNet 2019 official metric; 0.24-0.28 across training runs)  
                 **Alert threshold:** {result['threshold_used']:.3f} (risk scores are calibrated probabilities)  
                 **Prediction window:** up to 6 hours before clinical onset  
                 **Data:** PhysioNet/CinC Challenge 2019. Trained on hospital A (20,336 patients), tested once on hospital B (20,000 patients)  
@@ -432,8 +433,9 @@ if predict_btn:
         except (requests.exceptions.ConnectionError,
                 requests.exceptions.Timeout):
             st.error(
-                "❌ Could not reach the prediction API. It runs on free "
-                "hosting that sleeps when idle, so please try again in a minute."
+                "❌ Could not reach the prediction API. The model runs on a "
+                "serverless endpoint that sleeps when idle, so please try again "
+                "in a minute."
             )
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
@@ -464,8 +466,9 @@ else:
     with col3:
         st.markdown("""
         ### 📊 Model Performance
-        - **Test AUROC:** 0.778 (held-out hospital)
-        - **Challenge utility:** 0.281
-        - **Septic patients warned before onset:** 54%
+        - **Test AUROC:** 0.774 (held-out hospital)
+        - **Challenge utility:** 0.243
+        - **Septic patients warned before onset:** 67%
+        - **Non-septic patients ever alerted:** 41%
         - **Data:** 40,336 ICU patients, 2 hospitals
         """)
