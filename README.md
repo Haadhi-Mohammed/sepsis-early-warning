@@ -7,6 +7,9 @@ up to **6 hours before clinical onset**, built on the PhysioNet/CinC 2019
 Challenge data and being moved to a production setup on AWS (SageMaker,
 infrastructure as code).
 
+**Live demo:** https://d3j2opwsbr2bjy.cloudfront.net (the first prediction after
+an idle spell takes up to a minute while the serverless model starts).
+
 Sepsis is a leading cause of death in hospitals, and each hour of delayed
 treatment is associated with a 4–8% increase in mortality, so a reliable
 early warning buys clinicians time to act.
@@ -64,7 +67,8 @@ flowchart LR
     Q -->|pass| R[Model Registry]
     R -->|approved| EP[Serverless endpoint]
     EP --> API[Lambda + Function URL]
-    API --> UI[Dashboard<br/>Hugging Face, moving to S3 + CloudFront]
+    CF[CloudFront] -->|/api/*| API
+    CF -->|/*| WEB[(S3<br/>static dashboard)]
 ```
 
 | Part | AWS services | Status |
@@ -73,7 +77,7 @@ flowchart LR
 | Training pipeline | SageMaker Pipelines, Processing (Managed Spot Training once quota allows) | ✅ Running |
 | Model versioning and approval | SageMaker Model Registry | ✅ Running, manual approval |
 | Serving | SageMaker Serverless Inference, Lambda Function URL | ✅ Running |
-| Dashboard | S3 + CloudFront | Planned |
+| Dashboard | S3 + CloudFront (static site, API on the same address) | ✅ Running |
 | Monitoring and CD | EventBridge, CloudWatch, GitHub Actions | Planned |
 
 Design choices: region `ap-south-1` (Mumbai) for latency and data residency;
@@ -100,20 +104,26 @@ zero; warm requests take about 0.3 s, and the first request after idle waits
 25-70 s for a cold start). A Lambda Function URL provides the public API with
 the same routes as the FastAPI service (`GET /health`, `POST /predict`). A
 Function URL is used instead of API Gateway because the measured cold start
-exceeds API Gateway HTTP APIs' 30-second limit. The Streamlit dashboard on
-Hugging Face calls this API; the earlier Render deployment is being retired.
+exceeds API Gateway HTTP APIs' 30-second limit.
+
+The dashboard is a static page (HTML, CSS, JavaScript) in a private S3 bucket,
+served by CloudFront through Origin Access Control. CloudFront also routes
+`/api/*` to the Function URL, so page and API share one HTTPS address with no
+CORS, and the page wakes the endpoint as soon as it loads. The earlier
+Streamlit dashboard (Hugging Face) and Render deployment are being retired.
 
 ## Repository layout
 
 ```
 src/sepsis/        ML package: features, labels, model, training, evaluation, utility metric, inference
 api/               FastAPI service wrapping sepsis.inference
-infra/             AWS CDK app (infra/app.py, infra/sepsis_infra/) and the SageMaker pipeline (infra/pipeline/)
+infra/             AWS CDK app (infra/app.py, infra/sepsis_infra/), SageMaker pipeline (infra/pipeline/),
+                   serving code (infra/serving/) and the dashboard (infra/web/)
 tests/             pytest suite
 models/production/ Current model bundle (weights, config, preprocessor, SHAP background)
 reports/           Test evaluation (evaluation.json) and exploratory charts
 notebooks/         Exploratory data analysis
-dashboard/         Streamlit dashboard (to be replaced)
+dashboard/         Streamlit dashboard (superseded by infra/web/)
 ```
 
 ## Run locally
