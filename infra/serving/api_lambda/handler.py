@@ -34,7 +34,8 @@ def respond(status: int, body: dict) -> dict:
 
 def handler(event, context):
     method = event['requestContext']['http']['method']
-    path = event.get('rawPath', '/').rstrip('/') or '/'
+    # Through CloudFront requests arrive as /api/<route>; directly as /<route>
+    path = event.get('rawPath', '/').removeprefix('/api').rstrip('/') or '/'
 
     if method == 'GET' and path in ('/', '/health'):
         return respond(200, {'status': 'healthy', 'endpoint': ENDPOINT,

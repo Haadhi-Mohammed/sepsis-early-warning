@@ -85,11 +85,11 @@ class ServingStack(Stack):
             endpoint_config_name=config.attr_endpoint_config_name,
         )
 
-        self.api_url = self._api(served_model=f'v{model_version} (code {code_version})')
+        self.function_url = self._api(served_model=f'v{model_version} (code {code_version})')
 
         CfnOutput(self, 'EndpointName', value=ENDPOINT_NAME)
         CfnOutput(self, 'ServedModel', value=f'v{model_version} (code {code_version})')
-        CfnOutput(self, 'ApiUrl', value=self.api_url,
+        CfnOutput(self, 'ApiUrl', value=self.function_url.url,
                   description='Public HTTPS API: GET /health, POST /predict')
 
         NagSuppressions.add_resource_suppressions(config, [
@@ -106,7 +106,7 @@ class ServingStack(Stack):
         ], apply_to_children=True)
 
     # ── Public API ─────────────────────────────────────────────────────────
-    def _api(self, served_model: str) -> str:
+    def _api(self, served_model: str) -> lambda_.FunctionUrl:
         """
         A small Lambda that validates requests and forwards them to the
         endpoint, exposed through a Function URL (a built-in HTTPS address).
@@ -151,4 +151,4 @@ class ServingStack(Stack):
                        "function's own CloudWatch logs.",
              'appliesTo': ['Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole']},
         ], apply_to_children=True)
-        return url.url
+        return url

@@ -18,6 +18,7 @@ from cdk_nag import AwsSolutionsChecks
 
 from sepsis_infra.foundation_stack import FoundationStack
 from sepsis_infra.serving_stack import ServingStack
+from sepsis_infra.web_stack import WebStack
 
 app = cdk.App()
 
@@ -53,7 +54,7 @@ foundation = FoundationStack(
 # (python -m serving.package_model writes "serving" into cdk.json).
 serving = app.node.try_get_context('serving')
 if serving:
-    ServingStack(
+    serving_stack = ServingStack(
         app, 'SepsisServing',
         env=env,
         artifacts_bucket=foundation.artifacts_bucket,
@@ -61,6 +62,15 @@ if serving:
         model_version=int(serving['model_version']),
         code_version=serving['code_version'],
         description='Sepsis early warning: approved model on a SageMaker Serverless endpoint',
+    )
+
+    # Dashboard: static site on S3 + CloudFront, with /api/* forwarded to the
+    # serving stack's API
+    WebStack(
+        app, 'SepsisWeb',
+        env=env,
+        api_function_url=serving_stack.function_url,
+        description='Sepsis early warning: dashboard on S3 + CloudFront',
     )
 
 # Every resource gets these tags, so costs can be filtered per project in
