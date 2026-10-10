@@ -125,11 +125,15 @@ def build_code_bundle() -> Path:
 
 
 def bundle_hash(folder: Path) -> str:
-    """Hash of every file in the code bundle (paths + contents)."""
+    """
+    Hash of every file in the code bundle (paths + contents). Line endings
+    are normalised so a Git checkout on Windows (CRLF) and on Linux (LF)
+    give the same hash and don't bust the step cache.
+    """
     digest = hashlib.sha256()
     for f in sorted(p for p in folder.rglob('*') if p.is_file()):
         digest.update(f.relative_to(folder).as_posix().encode())
-        digest.update(f.read_bytes())
+        digest.update(f.read_bytes().replace(b'\r\n', b'\n'))
     return digest.hexdigest()[:12]
 
 
