@@ -19,6 +19,7 @@ from constructs import Construct
 
 GITHUB_OIDC_URL = 'https://token.actions.githubusercontent.com'
 MODEL_PACKAGE_GROUP = 'sepsis-warning'
+PIPELINE_NAME = 'sepsis-training'        # infra/pipeline/training_pipeline.py
 
 # AWS-owned ECR registries that host the prebuilt SageMaker containers we
 # use instead of building our own images. The account differs per region
@@ -65,6 +66,7 @@ class FoundationStack(Stack):
 
         self.sagemaker_role = self._sagemaker_role()
         self.github_role = self._github_role(github_repo)
+        self._github_pipeline_access()
         if studio_role:
             self._studio_read_evaluations(studio_role)
 
@@ -302,8 +304,39 @@ class FoundationStack(Stack):
         ))
         NagSuppressions.add_resource_suppressions(role, [{
             'id': 'AwsSolutions-IAM5',
-            'reason': 'Wildcard matches only the four CDK bootstrap roles '
+            'reason': 'Wildcards match only the four CDK bootstrap roles '
                       '(deploy, lookup, file- and image-publishing) of this '
-                      'account and region.',
+                      'account and region, and objects under pipeline/ in the '
+                      'artifacts bucket (CDK grant actions).',
         }], apply_to_children=True)
         return role
+
+    def _github_pipeline_access(self) -> None:
+        """
+        Lets CI publish the training pipeline definition (`training_pipeline.py
+        upsert`), which is a SageMaker API call rather than a CloudFormation
+        resource. Only that one pipeline, its code under pipeline/ in the
+        artifacts bucket, and handing the SageMaker role to SageMaker. It
+        cannot start executions, so CI never spends money on training.
+        """
+        role = self.github_role
+        role.add_to_policy(iam.PolicyStatement(
+            sid='ReadFoundationOutputs',
+            actions=['cloudformation:DescribeStacks'],
+            resources=[self.stack_id],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            sid='UpsertTrainingPipeline',
+            actions=['sagemaker:CreatePipeline', 'sagemaker:UpdatePipeline',
+                     'sagemaker:DescribePipeline', 'sagemaker:AddTags',
+                     'sagemaker:ListTags'],
+            resources=[f'arn:aws:sagemaker:{self.region}:{self.account}:pipeline/{PIPELINE_NAME}'],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            sid='PassSageMakerRoleToPipeline',
+            actions=['iam:PassRole'],
+            resources=[self.sagemaker_role.role_arn],
+            conditions={'StringEquals': {'iam:PassedToService': 'sagemaker.amazonaws.com'}},
+        ))
+        # The SDK uploads the step code under pipeline/ before upserting
+        self.artifacts_bucket.grant_read_write(role, 'pipeline/*')
