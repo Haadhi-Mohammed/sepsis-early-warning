@@ -15,16 +15,23 @@ Which model is served comes from cdk.json ("serving": model version + code
 hash), written by `python -m serving.package_model`. Changing it replaces
 the Model and endpoint config, and CloudFormation updates the endpoint to
 the new config in place (same name, same URL).
+
+CloudWatch alarms email the alert address (through SNS) when the API or the
+endpoint starts failing, and again when they recover.
 """
 
 from pathlib import Path
 
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
+from aws_cdk import aws_cloudwatch as cloudwatch
+from aws_cdk import aws_cloudwatch_actions as cw_actions
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_sagemaker as sagemaker
+from aws_cdk import aws_sns as sns
+from aws_cdk import aws_sns_subscriptions as subscriptions
 from cdk_nag import NagSuppressions
 from constructs import Construct
 
@@ -39,7 +46,7 @@ class ServingStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, *,
                  artifacts_bucket: s3.IBucket, sagemaker_role: iam.IRole,
-                 model_version: int, code_version: str,
+                 model_version: int, code_version: str, alert_email: str,
                  memory_mb: int = 3072, max_concurrency: int = 2,
                  **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -85,7 +92,9 @@ class ServingStack(Stack):
             endpoint_config_name=config.attr_endpoint_config_name,
         )
 
-        self.function_url = self._api(served_model=f'v{model_version} (code {code_version})')
+        self.function_url, api_function = self._api(
+            served_model=f'v{model_version} (code {code_version})')
+        self._alarms(alert_email, api_function)
 
         CfnOutput(self, 'EndpointName', value=ENDPOINT_NAME)
         CfnOutput(self, 'ServedModel', value=f'v{model_version} (code {code_version})')
@@ -106,7 +115,7 @@ class ServingStack(Stack):
         ], apply_to_children=True)
 
     # ── Public API ─────────────────────────────────────────────────────────
-    def _api(self, served_model: str) -> lambda_.FunctionUrl:
+    def _api(self, served_model: str) -> tuple[lambda_.FunctionUrl, lambda_.Function]:
         """
         A small Lambda that validates requests and forwards them to the
         endpoint, exposed through a Function URL (a built-in HTTPS address).
@@ -151,4 +160,52 @@ class ServingStack(Stack):
                        "function's own CloudWatch logs.",
              'appliesTo': ['Policy::arn:<AWS::Partition>:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole']},
         ], apply_to_children=True)
-        return url
+        return url, fn
+
+    # ── Monitoring ─────────────────────────────────────────────────────────
+    def _alarms(self, email: str, api: lambda_.Function) -> None:
+        """
+        Two alarms, each emailing on failure and again on recovery:
+          - API errors: the Lambda crashed or timed out (users saw a 5xx).
+            Handled outcomes (422 bad input, 429 busy) are not errors.
+          - Endpoint 5xx: the model container failed on a request.
+        Missing data counts as healthy: an idle demo sends no metrics at all.
+        Alarms cost $0.10/month each; SNS email is free at this volume.
+        """
+        topic = sns.Topic(self, 'Alerts', display_name='Sepsis warning alerts',
+                          enforce_ssl=True)
+        # AWS sends a confirmation email; alerts arrive once it is confirmed
+        topic.add_subscription(subscriptions.EmailSubscription(email))
+        notify = cw_actions.SnsAction(topic)
+
+        def alarm(construct_id: str, metric: cloudwatch.Metric, description: str):
+            a = cloudwatch.Alarm(
+                self, construct_id,
+                metric=metric,
+                threshold=1,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                evaluation_periods=1,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                alarm_description=description,
+            )
+            a.add_alarm_action(notify)
+            a.add_ok_action(notify)
+
+        five_minutes = Duration.minutes(5)
+        alarm('ApiErrorsAlarm',
+              api.metric_errors(period=five_minutes, statistic='Sum'),
+              'Prediction API (Lambda) failed or timed out in the last 5 minutes.')
+        alarm('EndpointErrorsAlarm',
+              cloudwatch.Metric(
+                  namespace='AWS/SageMaker', metric_name='Invocation5XXErrors',
+                  dimensions_map={'EndpointName': ENDPOINT_NAME, 'VariantName': 'AllTraffic'},
+                  period=five_minutes, statistic='Sum'),
+              'SageMaker endpoint returned server errors in the last 5 minutes.')
+
+        NagSuppressions.add_resource_suppressions(topic, [
+            {'id': 'AwsSolutions-SNS2',
+             'reason': 'Alert messages contain only alarm names and states. '
+                       'CloudWatch alarms cannot publish to a topic encrypted '
+                       'with the AWS-managed SNS key, and a customer KMS key '
+                       'costs $1/month for no benefit here.'},
+        ], apply_to_children=True)
