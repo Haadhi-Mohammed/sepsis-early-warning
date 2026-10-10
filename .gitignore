@@ -25,9 +25,6 @@ notebooks/mlflow.db
 # Jupyter checkpoints
 .ipynb_checkpoints/
 
-# Hugging Face Space deployment (its own git repo; retired in Phase 6)
-hf-space/
-
 # VS Code settings
 .vscode/
 
