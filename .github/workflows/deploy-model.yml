@@ -1,0 +1,70 @@
+name: Deploy model
+
+# Promote an Approved Model Registry version to the serving endpoint.
+#
+# Git stays the source of truth for what is served: this workflow packages the
+# model with the serving code, uploads it to S3, and opens a pull request that
+# changes `serving` in infra/cdk.json. Merging that PR runs the normal CI/CD
+# deploy. A model approved in the registry therefore reaches production only
+# through a reviewed, revertible commit.
+
+'on':
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Registry version to serve (blank = latest Approved)'
+        required: false
+        default: ''
+
+jobs:
+  package:
+    # The AWS role only trusts workflows running on main
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write        # OIDC token for AWS
+      contents: write        # push the promotion branch
+      pull-requests: write   # open the PR
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get AWS credentials (OIDC, no stored keys)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        aws-region: ap-south-1
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Package the approved model with the serving code
+      id: package
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        pip install boto3
+        python -m serving.package_model ${VERSION:+--version "$VERSION"}
+        echo "model_version=$(python -c "import json; print(json.load(open('cdk.json'))['context']['serving']['model_version'])")" >> "$GITHUB_OUTPUT"
+        echo "code_version=$(python -c "import json; print(json.load(open('cdk.json'))['context']['serving']['code_version'])")" >> "$GITHUB_OUTPUT"
+
+    - name: Open a pull request to serve it
+      uses: peter-evans/create-pull-request@v7
+      with:
+        add-paths: infra/cdk.json
+        branch: deploy-model/v${{ steps.package.outputs.model_version }}-${{ steps.package.outputs.code_version }}
+        delete-branch: true
+        commit-message: Serve model version ${{ steps.package.outputs.model_version }} (serving code ${{ steps.package.outputs.code_version }})
+        title: Serve model version ${{ steps.package.outputs.model_version }}
+        body: |
+          Promotes Model Registry version **${{ steps.package.outputs.model_version }}** (Approved) to the serving endpoint, with serving code `${{ steps.package.outputs.code_version }}`.
+
+          The packaged model is already in S3 under `serving/v${{ steps.package.outputs.model_version }}-${{ steps.package.outputs.code_version }}/`. Merging this PR runs the CI/CD deploy, which updates the SageMaker endpoint. Reverting it rolls the endpoint back.
+
+          Check the version's **Model quality** metrics in SageMaker Studio before merging.
