@@ -47,7 +47,8 @@ def code_hash(files: dict[str, Path]) -> str:
     digest = hashlib.sha256()
     for arcname, path in sorted(files.items()):
         digest.update(arcname.encode())
-        digest.update(path.read_bytes())
+        # Line endings normalised: CRLF (Windows checkout) and LF hash alike
+        digest.update(path.read_bytes().replace(b'\r\n', b'\n'))
     return digest.hexdigest()[:12]
 
 

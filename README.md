@@ -74,7 +74,7 @@ flowchart LR
 | Part | AWS services | Status |
 |---|---|---|
 | Foundation (storage, IAM, cost guardrails, CI access) | S3, IAM, AWS Budgets, IAM OIDC for GitHub Actions, via AWS CDK | ✅ Deployed |
-| Training pipeline | SageMaker Pipelines, Processing (Managed Spot Training once quota allows) | ✅ Running |
+| Training pipeline | SageMaker Pipelines, Processing, Managed Spot Training | ✅ Running |
 | Model versioning and approval | SageMaker Model Registry | ✅ Running, manual approval |
 | Serving | SageMaker Serverless Inference, Lambda Function URL | ✅ Running |
 | Dashboard | S3 + CloudFront (static site, API on the same address) | ✅ Running |
@@ -88,14 +88,15 @@ stored AWS keys.
 The pipeline runs Prepare, Train and Evaluate as SageMaker jobs from the raw
 data in S3; Prepare is cached between runs. Runs that pass the quality gate
 (test utility ≥ 0.20) register a new model version, which is deployed only
-after manual approval. Training currently runs inside a Processing job
-because the account has no training-job quota yet; a one-line switch
-(`TRAINING_MODE` in `infra/pipeline/training_pipeline.py`) moves it to
-Managed Spot Training.
+after manual approval. Training runs as a Managed Spot Training job (69-71%
+cheaper than on-demand, with per-epoch metrics in the console); a one-line
+switch (`TRAINING_MODE` in `infra/pipeline/training_pipeline.py`) falls back
+to a Processing job for accounts without training quota.
 
-Training is reproducible inside the pipeline (two runs produced the same
-model), but results vary across environments: the local run and the pipeline
-run reached the same validation utility (0.361) yet scored 0.281 and 0.243 on
+Training is reproducible inside the pipeline: three runs, two in a
+Processing job and one on Spot capacity on a different instance type,
+produced identical test metrics. Results do vary across environments: the
+local run and the pipeline run reached the same validation utility (0.361) yet scored 0.281 and 0.243 on
 the test hospital, mainly because the alert threshold chosen on validation
 differs. Multi-seed evaluation is the planned next step.
 

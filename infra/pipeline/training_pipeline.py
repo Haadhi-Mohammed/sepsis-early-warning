@@ -83,6 +83,21 @@ if sys.platform == 'win32':
     sm_processing.os = _WindowsSafeOs('os')
     atexit.register(lambda: [os.remove(p) for p in _deferred if os.path.exists(p)])
 
+    # Second Windows bug: ModelTrainer writes the job's bash launcher
+    # (sm_train.sh) in text mode, so Windows saves it with CRLF line endings
+    # and bash in the Linux container fails on the '\r'. Make that module's
+    # text-mode writes use LF.
+    import builtins
+
+    import sagemaker.train.model_trainer as sm_model_trainer
+
+    def _open_with_lf(file, mode='r', *args, **kwargs):
+        if 'b' not in mode and len(args) < 4:   # newline not given positionally
+            kwargs.setdefault('newline', '\n')
+        return builtins.open(file, mode, *args, **kwargs)
+
+    sm_model_trainer.open = _open_with_lf
+
 REGION = 'ap-south-1'
 STACK_NAME = 'SepsisFoundation'
 PIPELINE_NAME = 'sepsis-training'
@@ -94,12 +109,12 @@ PYTORCH_VERSION = '2.5'
 PY_VERSION = 'py311'
 
 # How the Train step runs:
-#   'processing'   - inside a Processing job. The account currently has
-#                    processing quota but 0 training-job quota.
 #   'training-job' - a SageMaker Training job on Managed Spot capacity, with
-#                    per-epoch metrics in the console. Switch to this once the
-#                    spot training quota (L-4CEE6BA6) is approved.
-TRAINING_MODE = 'processing'
+#                    per-epoch metrics in the console (needs the spot training
+#                    quota, L-4CEE6BA6).
+#   'processing'   - inside a Processing job. Fallback for accounts with
+#                    processing quota but no training-job quota.
+TRAINING_MODE = 'training-job'
 
 PROCESSING_INSTANCE = 'ml.t3.xlarge'   # 4 vCPU / 16 GB, burstable; has quota
 TRAINING_INSTANCE = 'ml.m5.xlarge'     # 4 vCPU / 16 GB; for 'training-job' mode
@@ -125,11 +140,15 @@ def build_code_bundle() -> Path:
 
 
 def bundle_hash(folder: Path) -> str:
-    """Hash of every file in the code bundle (paths + contents)."""
+    """
+    Hash of every file in the code bundle (paths + contents). Line endings
+    are normalised so a Git checkout on Windows (CRLF) and on Linux (LF)
+    give the same hash and don't bust the step cache.
+    """
     digest = hashlib.sha256()
     for f in sorted(p for p in folder.rglob('*') if p.is_file()):
         digest.update(f.relative_to(folder).as_posix().encode())
-        digest.update(f.read_bytes())
+        digest.update(f.read_bytes().replace(b'\r\n', b'\n'))
     return digest.hexdigest()[:12]
 
 
