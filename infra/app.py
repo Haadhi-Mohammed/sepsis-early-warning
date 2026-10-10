@@ -8,7 +8,8 @@ Run from infra/ with the virtualenv active:
     npx cdk deploy     # deploy
 
 Required environment variable:
-    BUDGET_EMAIL   address for AWS Budgets alerts (kept out of the repo)
+    BUDGET_EMAIL   address for AWS Budgets and CloudWatch alarm emails
+                   (kept out of the repo)
 """
 
 import os
@@ -61,6 +62,7 @@ if serving:
         sagemaker_role=foundation.sagemaker_role,
         model_version=int(serving['model_version']),
         code_version=serving['code_version'],
+        alert_email=budget_email,   # CloudWatch alarm emails
         description='Sepsis early warning: approved model on a SageMaker Serverless endpoint',
     )
 

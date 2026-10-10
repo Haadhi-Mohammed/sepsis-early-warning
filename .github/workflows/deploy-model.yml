@@ -31,16 +31,16 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Get AWS credentials (OIDC, no stored keys)
-      uses: aws-actions/configure-aws-credentials@v4
+      uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
         aws-region: ap-south-1
 
     - name: Set up Python 3.11
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: '3.11'
 
@@ -55,7 +55,7 @@ jobs:
         echo "code_version=$(python -c "import json; print(json.load(open('cdk.json'))['context']['serving']['code_version'])")" >> "$GITHUB_OUTPUT"
 
     - name: Open a pull request to serve it
-      uses: peter-evans/create-pull-request@v7
+      uses: peter-evans/create-pull-request@v8
       with:
         add-paths: infra/cdk.json
         branch: deploy-model/v${{ steps.package.outputs.model_version }}-${{ steps.package.outputs.code_version }}
