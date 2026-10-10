@@ -83,6 +83,21 @@ if sys.platform == 'win32':
     sm_processing.os = _WindowsSafeOs('os')
     atexit.register(lambda: [os.remove(p) for p in _deferred if os.path.exists(p)])
 
+    # Second Windows bug: ModelTrainer writes the job's bash launcher
+    # (sm_train.sh) in text mode, so Windows saves it with CRLF line endings
+    # and bash in the Linux container fails on the '\r'. Make that module's
+    # text-mode writes use LF.
+    import builtins
+
+    import sagemaker.train.model_trainer as sm_model_trainer
+
+    def _open_with_lf(file, mode='r', *args, **kwargs):
+        if 'b' not in mode and len(args) < 4:   # newline not given positionally
+            kwargs.setdefault('newline', '\n')
+        return builtins.open(file, mode, *args, **kwargs)
+
+    sm_model_trainer.open = _open_with_lf
+
 REGION = 'ap-south-1'
 STACK_NAME = 'SepsisFoundation'
 PIPELINE_NAME = 'sepsis-training'
