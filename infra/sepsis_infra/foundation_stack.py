@@ -306,18 +306,22 @@ class FoundationStack(Stack):
             'id': 'AwsSolutions-IAM5',
             'reason': 'Wildcards match only the four CDK bootstrap roles '
                       '(deploy, lookup, file- and image-publishing) of this '
-                      'account and region, and objects under pipeline/ in the '
-                      'artifacts bucket (CDK grant actions).',
+                      'account and region; objects under pipeline/, models/ '
+                      'and serving/ in the artifacts bucket (CDK grant '
+                      'actions); versions in the one model package group; and '
+                      'sagemaker:ListModelPackages, which only accepts "*".',
         }], apply_to_children=True)
         return role
 
     def _github_pipeline_access(self) -> None:
         """
         Lets CI publish the training pipeline definition (`training_pipeline.py
-        upsert`), which is a SageMaker API call rather than a CloudFormation
-        resource. Only that one pipeline, its code under pipeline/ in the
-        artifacts bucket, and handing the SageMaker role to SageMaker. It
-        cannot start executions, so CI never spends money on training.
+        upsert`) and package approved models for serving: SageMaker API calls
+        rather than CloudFormation resources. Only that one pipeline and model
+        group, their prefixes in the artifacts bucket, and handing the
+        SageMaker role to SageMaker. It cannot start executions or approve
+        models, so CI never spends money on training or promotes a model
+        on its own.
         """
         role = self.github_role
         role.add_to_policy(iam.PolicyStatement(
@@ -340,3 +344,21 @@ class FoundationStack(Stack):
         ))
         # The SDK uploads the step code under pipeline/ before upserting
         self.artifacts_bucket.grant_read_write(role, 'pipeline/*')
+
+        # Model promotion (serving/package_model.py): look up the latest
+        # Approved version, read its model.tar.gz, and upload the repacked
+        # archive under serving/.
+        role.add_to_policy(iam.PolicyStatement(
+            sid='ReadModelRegistry',
+            actions=['sagemaker:DescribeModelPackage'],
+            resources=[f'arn:aws:sagemaker:{self.region}:{self.account}'
+                       f':model-package/{MODEL_PACKAGE_GROUP}/*'],
+        ))
+        role.add_to_policy(iam.PolicyStatement(
+            sid='ListModelVersions',
+            # ListModelPackages has no resource-level permissions
+            actions=['sagemaker:ListModelPackages'],
+            resources=['*'],
+        ))
+        self.artifacts_bucket.grant_read(role, 'models/*')
+        self.artifacts_bucket.grant_put(role, 'serving/*')
