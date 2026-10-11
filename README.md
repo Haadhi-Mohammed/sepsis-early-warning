@@ -9,7 +9,7 @@ training pipeline, a model registry with human approval, a serverless
 endpoint, and infrastructure and deployments fully automated with AWS CDK and
 GitHub Actions.
 
-**Live demo:** https://d3j2opwsbr2bjy.cloudfront.net (the first prediction after
+**Live demo:** https://sepsiswarning.haadhi.dev (the first prediction after
 an idle spell takes up to a minute while the serverless model starts).
 
 Sepsis is a leading cause of death in hospitals, and each hour of delayed

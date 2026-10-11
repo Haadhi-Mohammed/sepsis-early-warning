@@ -72,6 +72,9 @@ if serving:
         app, 'SepsisWeb',
         env=env,
         api_function_url=serving_stack.function_url,
+        # Optional custom address: {"name": ..., "certificate_id": ...} of an
+        # ACM certificate in us-east-1, where CloudFront certificates must live
+        domain=app.node.try_get_context('web_domain'),
         description='Sepsis early warning: dashboard on S3 + CloudFront',
     )
 
