@@ -19,6 +19,10 @@
     "monthly_budget_usd": 10,
     "model_registry": true,
     "studio_role": "service-role/AmazonSageMaker-ExecutionRole-20261008T114273",
+    "web_domain": {
+      "name": "sepsiswarning.haadhi.dev",
+      "certificate_id": "a58806f5-2f71-4b31-8cdc-fae7984324ad"
+    },
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
     "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
     "@aws-cdk/aws-apigateway:disableCloudWatchRole": true,
