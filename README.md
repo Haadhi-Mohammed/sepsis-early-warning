@@ -35,6 +35,11 @@ missed cases (heavily penalised) against false alarms; the two runs chose
 slightly different thresholds, which explains most of the difference above,
 and the drop from validation to test reflects the shift between hospitals.
 
+Full reports: [`reports/evaluation_registry_v1.json`](reports/evaluation_registry_v1.json)
+(served model, as recorded by the pipeline's Evaluate step) and
+[`reports/evaluation.json`](reports/evaluation.json) (local run, matching the
+bundle in `models/production/`).
+
 ## How the model was built
 
 - **Task:** the official challenge formulation. At every hour, predict
@@ -150,7 +155,7 @@ infra/web/           Static dashboard
 .github/workflows/   CI/CD and the Deploy model workflow
 tests/               pytest suite
 models/production/   Local model bundle (weights, config, preprocessor, SHAP background)
-reports/             Test evaluation (evaluation.json) and exploratory charts
+reports/             Test evaluations (served model and local run) and exploratory charts
 notebooks/           Exploratory data analysis
 ```
 
